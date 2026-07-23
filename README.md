@@ -21,6 +21,8 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
 
 ## One-time setup
 
+> Full step-by-step + troubleshooting: **[SETUP.md](SETUP.md)** · resuming later? **[HANDOFF.md](HANDOFF.md)**
+
 1. **Tools** (Arch): `sudo pacman -S opentofu tailscale doctl jq mosh openssh`
 2. **Tailscale**: `sudo tailscale up` on this laptop (and install the app on your phone + iPad).
    In the admin console, make sure your ACL defines `tag:server`.

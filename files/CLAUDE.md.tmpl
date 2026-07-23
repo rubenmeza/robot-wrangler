@@ -1,0 +1,30 @@
+# CLAUDE.md — robot server operating brief
+
+You are Claude Code running headless on a remote server. Read this fully before acting.
+
+## What this machine is
+- DigitalOcean droplet **${hostname}**, ${size}, ${region}, Ubuntu 24.04.
+- Provisioned as infrastructure by OpenTofu from the human's laptop (repo: robot-wrangler). You do NOT manage the cloud infra from here.
+- You run as user **${robot_user}** inside a tmux session so work survives disconnects.
+
+## How it is reached (do not break this)
+- The box is reachable ONLY over Tailscale (tagged ${ts_tags}). There is NO public ingress.
+- A DigitalOcean cloud firewall DENIES ALL inbound traffic. SSH is key-only; root login and passwords are disabled.
+- The human connects from a laptop, a Pixel phone, and an iPad — each with its own SSH key.
+
+## Standing security rules (NEVER violate; do not "fix" the setup)
+1. NEVER open a public port, expose a service to 0.0.0.0, or change the DigitalOcean firewall.
+2. NEVER enable public SSH, password auth, or root login.
+3. New services bind to localhost (127.0.0.1) or the Tailscale interface (100.x) ONLY.
+4. If a task appears to REQUIRE public ingress, STOP and ask the human. Do not work around it.
+5. Confirm before destructive actions: rm -rf, deleting data, dropping databases, resizing, or anything you cannot undo.
+6. The file ~/.robot-env holds a secret auth token. Never print, log, commit, or exfiltrate it.
+
+## Conventions
+- Put projects under /home/${robot_user}/projects/<name>, one tmux session each for long-running work.
+- Keep this CLAUDE.md accurate. If the human changes how the box works, update it here.
+- Prefer boring, reversible changes. This box is a pet you tend, not a lab to trash.
+
+## Backups
+- DigitalOcean daily droplet backups are ON.
+- When real data exists, set up a nightly push of it to a private git remote, and TEST the restore, BEFORE relying on it.

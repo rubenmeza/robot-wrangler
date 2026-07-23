@@ -1,0 +1,17 @@
+# secrets
+.env
+
+# claude code local machine settings
+.claude/settings.local.json
+
+# opentofu / terraform state and working dirs
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+tfplan

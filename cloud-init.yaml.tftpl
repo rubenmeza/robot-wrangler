@@ -1,0 +1,67 @@
+#cloud-config
+# Runs once, on first boot, as root. The box is already firewalled shut to the public
+# internet at this point, so everything here is outbound-only. Tailscale is what makes
+# the box reachable afterwards.
+
+package_update: true
+package_upgrade: true
+packages:
+  - tmux
+  - mosh
+  - curl
+  - git
+  - jq
+  - ca-certificates
+
+users:
+  - name: ${robot_user}
+    groups: [sudo]
+    shell: /bin/bash
+    # Convenience passwordless sudo: acceptable because reaching this user already requires
+    # a device key AND being on the tailnet. Tighten if your threat model differs.
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: true
+    ssh_authorized_keys:
+%{ for key in ssh_pubkeys ~}
+      - ${key}
+%{ endfor ~}
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/99-robot-hardening.conf
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+      PubkeyAuthentication yes
+
+  - path: /home/${robot_user}/CLAUDE.md
+    owner: ${robot_user}:${robot_user}
+    permissions: '0644'
+    encoding: b64
+    content: ${claude_md_b64}
+
+  - path: /opt/robot/install-claude.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      # Claude Code native installer (installs to ~/.local/bin/claude).
+      curl -fsSL https://claude.ai/install.sh | bash
+      # Ensure the agent picks up its auth token (pushed later, over SSH) and its binary.
+      touch "$HOME/.bashrc"
+      grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" \
+        || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+      grep -qxF '[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"' "$HOME/.bashrc" \
+        || echo '[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"' >> "$HOME/.bashrc"
+
+runcmd:
+  # Apply the SSH hardening drop-in.
+  - [systemctl, restart, ssh]
+  # Join the tailnet with the single-use, pre-authorized, tagged key. Tagged => no key expiry.
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --authkey='${tailscale_authkey}' --hostname='${ts_hostname}' --advertise-tags='${ts_tags}'
+  # Install the agent as the robot user (not root).
+  - sudo -u ${robot_user} -H bash /opt/robot/install-claude.sh
+  # Readiness marker the laptop polls for before pushing the auth token.
+  - mkdir -p /opt/robot && touch /opt/robot/.provisioned

@@ -65,6 +65,10 @@ write_files:
         || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
       grep -qxF '[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"' "$HOME/.bashrc" \
         || echo '[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"' >> "$HOME/.bashrc"
+      # Auto-attach the shared 'robot' tmux session on interactive login, so every device
+      # (laptop / phone / iPad) lands in the SAME live Claude session and can hand off mid-work.
+      grep -qF 'auto-attach robot tmux' "$HOME/.bashrc" \
+        || printf '\n# auto-attach robot tmux on interactive login\nif [ -z "$TMUX" ] && [ -n "$PS1" ] && command -v tmux >/dev/null; then\n  tmux new -A -s robot\nfi\n' >> "$HOME/.bashrc"
 
 runcmd:
   # Apply the SSH hardening drop-in.

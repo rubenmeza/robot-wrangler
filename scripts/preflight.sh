@@ -18,7 +18,7 @@ if [ ! -f .env ]; then
   echo "MISSING: .env  (cp .env.example .env, then fill it in)"; fail=1
 else
   _load_env
-  for v in DIGITALOCEAN_TOKEN TF_VAR_tailscale_authkey CLAUDE_CODE_OAUTH_TOKEN; do
+  for v in DIGITALOCEAN_TOKEN TF_VAR_tailscale_authkey CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN; do
     [ -n "${!v:-}" ] || { echo "MISSING in .env: $v"; fail=1; }
   done
 fi

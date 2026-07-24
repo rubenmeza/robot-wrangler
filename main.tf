@@ -19,6 +19,8 @@ locals {
     ts_tags           = var.ts_tags
     ssh_pubkeys       = local.device_pubkeys
     claude_md_b64     = base64encode(local.claude_md)
+    git_author_name   = var.git_author_name
+    git_author_email  = var.git_author_email
   })
 }
 

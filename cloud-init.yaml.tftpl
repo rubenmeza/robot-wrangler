@@ -69,6 +69,13 @@ write_files:
       # (laptop / phone / iPad) lands in the SAME live Claude session and can hand off mid-work.
       grep -qF 'auto-attach robot tmux' "$HOME/.bashrc" \
         || printf '\n# auto-attach robot tmux on interactive login\nif [ -z "$TMUX" ] && [ -n "$PS1" ] && command -v tmux >/dev/null; then\n  tmux new -A -s robot\nfi\n' >> "$HOME/.bashrc"
+      # Git identity: the robot's commits are authored as the owner (ADR 0002).
+      git config --global user.name "${git_author_name}"
+      git config --global user.email "${git_author_email}"
+      # Route github.com HTTPS auth through gh, which reads GH_TOKEN from ~/.robot-env (pushed
+      # post-boot over SSH). gh is installed via apt before this script runs.
+      git config --global --replace-all credential.https://github.com.helper '!gh auth git-credential'
+      git config --global --replace-all credential.https://gist.github.com.helper '!gh auth git-credential'
 
 runcmd:
   # Apply the SSH hardening drop-in.
@@ -76,6 +83,14 @@ runcmd:
   # Join the tailnet with the single-use, pre-authorized, tagged key. Tagged => no key expiry.
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --authkey='${tailscale_authkey}' --hostname='${ts_hostname}' --advertise-tags='${ts_tags}'
+  # Install GitHub CLI from its official apt repo (not in Ubuntu's default repos). The agent uses
+  # it to read issues and open PRs, and git uses it as the github.com credential helper.
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  - chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+  - apt-get update
+  - apt-get install -y gh
   # Clear password aging on the robot account. lock_passwd leaves the shadow last-change
   # field unset, which PAM account management treats as "expired" — that makes the
   # `sudo -u ${robot_user}` below fail with "unable to change expired password", so the

@@ -18,12 +18,19 @@ You are Claude Code running headless on a remote server. Read this fully before 
 3. New services bind to localhost (127.0.0.1) or the Tailscale interface (100.x) ONLY.
 4. If a task appears to REQUIRE public ingress, STOP and ask the human. Do not work around it.
 5. Confirm before destructive actions: rm -rf, deleting data, dropping databases, resizing, or anything you cannot undo.
-6. The file ~/.robot-env holds a secret auth token. Never print, log, commit, or exfiltrate it.
+6. The file ~/.robot-env holds secret auth tokens (Claude subscription + a GitHub PAT). Never print, log, commit, or exfiltrate the file or the tokens in it ($CLAUDE_CODE_OAUTH_TOKEN, $GH_TOKEN).
+7. GitHub: deliver work ONLY as a feature branch + pull request. NEVER push to `main` or a protected branch, and never merge your own PR — the human reviews and merges (ADR 0002).
 
 ## Conventions
 - Put projects under /home/${robot_user}/projects/<name>, one tmux session each for long-running work.
 - Keep this CLAUDE.md accurate. If the human changes how the box works, update it here.
 - Prefer boring, reversible changes. This box is a pet you tend, not a lab to trash.
+
+## GitHub
+- You act as the human's own GitHub identity. `gh` is installed and authenticated from $GH_TOKEN (a classic PAT, `repo` scope) in ~/.robot-env; `git` talks to github.com over HTTPS through it. No login step needed — it just works.
+- Working an issue: read it (`gh issue view`), branch, commit, push, open a PR (`gh pr create`) linked to the issue. Never write to `main` directly (rule 7).
+- Clone on demand under /home/${robot_user}/projects/<name>. The token reaches the human's personal and organization repos.
+- The token's scope is `repo` only: you CANNOT delete repos, edit CI/`.github/workflows`, or manage orgs. If a task seems to need more, STOP and ask the human (rule 4).
 
 ## Backups
 - DigitalOcean daily droplet backups are ON.

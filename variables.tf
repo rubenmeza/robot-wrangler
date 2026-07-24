@@ -45,3 +45,15 @@ variable "backups" {
   type        = bool
   default     = true
 }
+
+variable "git_author_name" {
+  description = "Name used for the robot's git commits. Commits are authored as the owner (see ADR 0002)."
+  type        = string
+  default     = "Ruben Meza"
+}
+
+variable "git_author_email" {
+  description = "Email used for the robot's git commits. Matches the owner's laptop identity (see ADR 0002)."
+  type        = string
+  default     = "rmezar@gmail.com"
+}

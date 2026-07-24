@@ -42,3 +42,13 @@ reached, and the standing rules it must never break. Priming, not configuration.
 ### Break-glass
 The only recovery path if the tailnet route is lost: the provider's out-of-band web console.
 Not an everyday door.
+
+### Agent GitHub access
+The robot acts on GitHub as the owner's own identity, via a token that is present on every
+spawn. It reads issues and delivers work as pull requests. It never writes to `main`. The
+token is delivered and held exactly like the agent's other secret — see Handover's standing
+rules — and can be revoked instantly, which is the kill-switch.
+
+### PR-only delivery
+The standing rule for how the robot's GitHub work lands: always a feature branch and a pull
+request, never a direct push to `main` or any protected branch. The owner reviews and merges.

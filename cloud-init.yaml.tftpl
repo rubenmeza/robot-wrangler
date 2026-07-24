@@ -13,6 +13,12 @@ packages:
   - jq
   - ca-certificates
 
+# Don't force a password change on first login. Without this, cloud-init's default
+# password expiry marks the locked robot account "expired", which breaks `sudo -u robot`
+# (used below to install the agent) and the robot user's own NOPASSWD sudo.
+chpasswd:
+  expire: false
+
 users:
   - name: ${robot_user}
     groups: [sudo]
@@ -35,11 +41,16 @@ write_files:
       PermitRootLogin no
       PubkeyAuthentication yes
 
+  # defer: write this AFTER the user exists (config stage), not in the early write_files
+  # stage. Otherwise cloud-init creates /home/${robot_user} as root before the user exists,
+  # leaving a root-owned home the robot user can't write to, and drops this file because the
+  # ${robot_user} owner can't yet be resolved.
   - path: /home/${robot_user}/CLAUDE.md
     owner: ${robot_user}:${robot_user}
     permissions: '0644'
     encoding: b64
     content: ${claude_md_b64}
+    defer: true
 
   - path: /opt/robot/install-claude.sh
     permissions: '0755'
@@ -61,6 +72,11 @@ runcmd:
   # Join the tailnet with the single-use, pre-authorized, tagged key. Tagged => no key expiry.
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --authkey='${tailscale_authkey}' --hostname='${ts_hostname}' --advertise-tags='${ts_tags}'
+  # Clear password aging on the robot account. lock_passwd leaves the shadow last-change
+  # field unset, which PAM account management treats as "expired" — that makes the
+  # `sudo -u ${robot_user}` below fail with "unable to change expired password", so the
+  # installer silently never runs. Set last-change=today and disable min/max/inactive/expire.
+  - chage -d $(date +%Y-%m-%d) -m 0 -M -1 -I -1 -E -1 ${robot_user}
   # Install the agent as the robot user (not root).
   - sudo -u ${robot_user} -H bash /opt/robot/install-claude.sh
   # Readiness marker the laptop polls for before pushing the auth token.

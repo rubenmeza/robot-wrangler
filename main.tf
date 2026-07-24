@@ -5,11 +5,12 @@ locals {
 
   # The on-box briefing that primes every agent session (server facts + standing security rules).
   claude_md = templatefile("${path.module}/files/CLAUDE.md.tmpl", {
-    hostname   = var.ts_hostname
-    region     = var.region
-    size       = var.size
-    robot_user = var.robot_user
-    ts_tags    = var.ts_tags
+    hostname    = var.ts_hostname
+    region      = var.region
+    size        = var.size
+    robot_user  = var.robot_user
+    ts_tags     = var.ts_tags
+    multiplexer = var.robot_multiplexer
   })
 
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
@@ -21,6 +22,7 @@ locals {
     claude_md_b64     = base64encode(local.claude_md)
     git_author_name   = var.git_author_name
     git_author_email  = var.git_author_email
+    multiplexer       = var.robot_multiplexer
   })
 }
 

@@ -22,7 +22,8 @@ Verify: `tofu version && tailscale version && doctl version`.
 sudo systemctl enable --now tailscaled
 sudo tailscale up
 ```
-Install the Tailscale app on the **Pixel** and **iPad** too, same account. (Their SSH clients come later.)
+Install the Tailscale app on the **Pixel** and **iPad** too, same account. (The **Moshi** app is
+their SSH/mosh client — install it and add device keys later; see `devices/README.md` and ADR 0004.)
 
 ## 3. Tailscale ACL — define `tag:server`  ⚠️ order matters
 Admin console → **Access Controls**. Ensure the policy contains:
@@ -68,7 +69,9 @@ cd /home/pollo/Dev/robot-wrangler
 cp .env.example .env
 $EDITOR .env   # DIGITALOCEAN_TOKEN, TF_VAR_tailscale_authkey, CLAUDE_CODE_OAUTH_TOKEN
 ```
-`.env` is gitignored — never commit it.
+`.env` is gitignored — never commit it. Optional: set `TF_VAR_robot_multiplexer` to `herdr`
+(default) or `tmux` to pick the on-box multiplexer profile — herdr attaches over SSH, tmux over
+mosh (ADR 0003). Leave it unset for herdr.
 
 ## 9. Preflight
 ```bash
@@ -87,12 +90,13 @@ cloud-init to finish → pushes the Claude token over SSH. ~3–6 min (apt upgra
 ## 11. Verify + first session
 ```bash
 make robot-status
-make robot-attach          # mosh + tmux session 'robot'
+make robot-attach          # shared 'robot' session (herdr/ssh or tmux/mosh per profile)
 # on the box:
 claude --version
 claude                     # already authed — just talk to it
 ```
-Detach tmux with **Ctrl-b d**; work keeps running while you close the laptop.
+Detach and leave work running: **Ctrl-b d** (tmux) or herdr's detach key. Then close the laptop;
+reattach from any device and you land back in the same live session.
 
 ## Daily use
 From any device on the tailnet: `make robot-attach` → `claude`. That is the whole loop.

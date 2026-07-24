@@ -14,10 +14,13 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
   **OpenTofu + cloud-init**.
 - **Tailscale**-only access. The DO firewall denies all inbound; the box joins your tailnet on
   first boot via a single-use key. SSH is key-only, root/passwords disabled.
-- **Claude Code** installed and authed with *your subscription* (no API billing), running in
-  **tmux** so it survives disconnects.
-- Reach it from your **laptop** (native ssh), **Pixel** (Termux), **iPad** (Blink) — **mosh** over
-  the tailnet for sessions that survive network drops.
+- **Claude Code** installed and authed with *your subscription* (no API billing), running inside a
+  multiplexer so it survives disconnects — **herdr** by default (agent-aware TUI) or classic
+  **tmux**, picked at provision time (see [ADR 0003](docs/adr/0003-multiplexer-profile-at-provision-time.md)).
+- Reach it from your **laptop** (native ssh) and your **Pixel + iPad** (the **Moshi** app, see
+  [ADR 0004](docs/adr/0004-moshi-mobile-client.md)). Transport follows the profile: herdr over
+  plain SSH, tmux over **mosh** for sessions that survive network drops. Every device auto-attaches
+  the **same** live `robot` session, so you can hand off mid-work between them.
 
 ## One-time setup
 
@@ -45,7 +48,7 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
 ```bash
 make preflight      # verify tools, secrets, tailnet, doctl auth
 make robot-wrangler   # provision + join tailnet + push token   (idempotent)
-make robot-attach   # mosh in + attach the 'robot' tmux session; then run: claude
+make robot-attach   # attach the shared 'robot' session (herdr/ssh or tmux/mosh per profile); then run: claude
 make robot-ssh      # plain ssh over the tailnet
 make robot-status   # droplet + tailnet status
 make robot-destroy  # tear it all down

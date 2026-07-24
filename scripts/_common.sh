@@ -4,6 +4,7 @@
 _load_env() { if [ -f .env ]; then set -a; . ./.env; set +a; fi; }
 _host() { printf '%s' "${TF_VAR_ts_hostname:-robot}"; }
 _key()  { printf '%s' "${ROBOT_SSH_KEY:-$HOME/.ssh/robot_ed25519}"; }
+_mux()  { printf '%s' "${TF_VAR_robot_multiplexer:-herdr}"; }
 
 # The box's tailnet IP, resolved by hostname from the LOCAL tailscale daemon.
 _ip() {

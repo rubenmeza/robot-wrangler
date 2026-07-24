@@ -13,15 +13,17 @@ cp ~/.ssh/robot_ed25519.pub devices/arch.pub
 ```
 Point the scripts at the private half: `export ROBOT_SSH_KEY="$HOME/.ssh/robot_ed25519"` (in `.env`).
 
-## Pixel 8 Pro (Termux)
-```bash
-pkg install openssh
-ssh-keygen -t ed25519 -f ~/.ssh/robot -C robot-pixel
-cat ~/.ssh/robot.pub    # paste into devices/pixel.pub on your laptop
-```
+## Pixel 8 Pro + iPad Air M1 (Moshi)
 
-## iPad Air M1 (Blink Shell)
-`config` → Keys → new ed25519 key → copy the public key → paste into `devices/ipad.pub`.
+Both mobile devices use the **Moshi** app (App Store / Google Play) — one app, same steps on
+each — replacing the old Termux (Pixel) and Blink (iPad) setups (ADR 0004). In Moshi, generate a
+new SSH key (ed25519), copy its **public** half, and paste it into the matching file on your
+laptop: `devices/pixel.pub` and `devices/ipad.pub`. Public keys only — never paste a private key.
+
+Connection, per device: install the Tailscale app and sign in (so the box is reachable on the
+tailnet), then add a host in Moshi pointing at the `robot` tailnet name/IP, user `robot`, with the
+key above. Transport follows the box's multiplexer profile (ADR 0003): **herdr → SSH**,
+**tmux → mosh**. On login you auto-attach the shared `robot` session — same one the laptop sees.
 
 After adding a device key to an already-running box, re-seed with:
 `make robot-destroy && make robot-wrangler` (cattle, not pet), or append it manually to

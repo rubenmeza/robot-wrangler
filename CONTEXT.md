@@ -16,7 +16,23 @@ The reason the box exists.
 
 ### Control surface
 The set of clients the owner uses to reach and drive the agent: the laptop (native terminal),
-the phone (Termux), and the tablet (Blink). Each is a distinct entry point holding its own key.
+and the phone + tablet (Moshi). Each is a distinct entry point holding its own key.
+
+### Moshi
+The mobile Control-surface client (iOS/Android app) on the Pixel and iPad, replacing Blink and
+Termux. Speaks SSH/mosh over the tailnet and drives whatever Multiplexer the box runs. It is a
+client only — never a multiplexer, never installed on the box.
+
+### Multiplexer
+The on-box program that owns the single persistent `robot` session every device attaches to —
+the thing that makes handoff work. Exactly one runs per box; which one is fixed at provision
+time, never chosen per attach. The choice is really a *profile*: it also fixes the transport —
+Herdr pairs with plain SSH (full-fidelity TUI), tmux pairs with mosh (drop-proof). _Avoid_:
+"session manager".
+
+### Herdr
+An agent-aware Multiplexer (FOSS binary on the box) that can play the Multiplexer role instead
+of tmux, adding semantic agent state (blocked / working / done / idle) that plain tmux lacks.
 
 ### Tailnet
 The owner's private Tailscale network. The box and every control-surface device are members.

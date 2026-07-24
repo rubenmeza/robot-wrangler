@@ -21,7 +21,12 @@ reachable **only** over Tailscale (no public ingress). One command up, one down.
 - Agent auth = **Claude subscription** via `claude setup-token` (no API billing), pushed over SSH
   post-boot (never in metadata).
 - Secrets in **`.env`** (gitignored).
-- Control surface: native ssh+tmux (Arch), Termux (Pixel), Blink (iPad), **mosh** over the tailnet.
+- Control surface: laptop native terminal (Arch); Pixel + iPad via the **Moshi** app (ADR 0004,
+  replaced Termux/Blink). Transport follows the multiplexer profile — herdr/ssh or tmux/mosh.
+- **Multiplexer profile** (ADR 0003): provision-time `TF_VAR_robot_multiplexer` = `herdr` (default,
+  agent-aware TUI over SSH) or `tmux` (over mosh). Both binaries installed; the var picks the
+  auto-attach target + transport. Single shared `robot` session preserved → handoff intact.
+  Switching = destroy + rebuild (cattle).
 - **Born-locked** security: firewall denies all inbound from birth; box joins the tailnet outbound;
   no public-SSH bootstrap; no human "verify before lock" gate. This is the core idea (ADR 0001).
 
@@ -45,11 +50,13 @@ Open **SETUP.md**, start at step 1. First milestone: `make preflight` passes. Th
 `make robot-wrangler` for the first box. Consider `git commit` once it applies clean.
 
 ## Parked (later, not v1)
-- Notifications (ntfy/Telegram → phone when Claude finishes/needs approval). Easy cloud-init add.
+- ~~Notifications (ntfy/Telegram)~~ — DROPPED. Now handled by Moshi push (free tier) + herdr
+  agent-state (ADR 0004). Verify-item: does Moshi push fire while the app is CLOSED? If it's
+  connection-only, reopen a box-side notifier.
 - Chat bridge (Telegram/Discord → drive Claude from phone w/o SSH). Higher risk (RCE surface); lock
-  to your user, bind to tailnet.
+  to your user, bind to tailnet. (Partly obsoleted by Moshi voice-to-terminal + mobile UI.)
 - Nightly git-push backup of box data once real projects exist.
-- Autostart Claude in tmux on boot (currently manual `claude`).
+- Autostart Claude in the multiplexer on boot (currently manual `claude`).
 
 ## Gotchas
 - Box is **cattle**. If Tailscale fails to join on first boot → unreachable except DO console →

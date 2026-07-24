@@ -40,6 +40,17 @@ variable "robot_user" {
   default     = "robot"
 }
 
+variable "robot_multiplexer" {
+  description = "On-box multiplexer profile for the shared `robot` session (see ADR 0003). `herdr` = agent-aware TUI reached over plain SSH; `tmux` = classic, reached over mosh. Both binaries are installed either way; this only picks the auto-attach target and the attach transport. Set via TF_VAR_robot_multiplexer in .env."
+  type        = string
+  default     = "herdr"
+
+  validation {
+    condition     = contains(["herdr", "tmux"], var.robot_multiplexer)
+    error_message = "robot_multiplexer must be \"herdr\" or \"tmux\"."
+  }
+}
+
 variable "backups" {
   description = "Enable DigitalOcean daily droplet backups (+20% of droplet price)."
   type        = bool

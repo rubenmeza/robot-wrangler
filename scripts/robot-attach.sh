@@ -6,16 +6,18 @@ _load_env
 
 ip="$(_ip)"; [ -n "$ip" ] || { echo "robot not on the tailnet" >&2; exit 1; }
 
-# Open an INTERACTIVE login; the box's ~/.bashrc auto-attaches the shared `robot` session in the
-# provisioned multiplexer (ADR 0003). We deliberately do NOT pass an explicit `-- <mux> ...`:
-# that runs non-interactively, skips ~/.bashrc, and can't resolve ~/.local/bin/herdr on PATH
-# ("herdr: command not found"). Letting .bashrc drive keeps robot-attach, a bare ssh, and Moshi
-# all identical. Transport follows the profile:
+# Open an INTERACTIVE login; the box's /etc/profile.d/10-robot.sh auto-attaches the shared `robot`
+# session in the provisioned multiplexer (ADR 0003). We deliberately do NOT pass an explicit
+# `-- <mux> ...`: that runs non-interactively, skips the login-shell drop-in, and can't resolve
+# ~/.local/bin/herdr on PATH ("herdr: command not found"). Letting the drop-in drive keeps
+# robot-attach, a bare ssh, and Moshi all identical. Transport follows the profile (_mux_transport):
 #   herdr -> plain SSH (full-fidelity Rust/Ratatui TUI)
 #   tmux  -> mosh       (survives cellular drops)
-if [ "$(_mux)" = herdr ]; then
-  exec ssh -t -i "$(_key)" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$(_host)@$ip"
+# Both paths build the ssh identity from _common's single source (_ssh_cmd).
+host="$(_host)@$ip"
+if [ "$(_mux_transport)" = mosh ]; then
+  exec mosh --ssh="$(_ssh_cmd)" "$host"
 else
-  exec mosh --ssh="ssh -i $(_key) -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-    "$(_host)@$ip"
+  # shellcheck disable=SC2046  # intentional word-split of the ssh option string into argv
+  exec $(_ssh_cmd) -t "$host"
 fi

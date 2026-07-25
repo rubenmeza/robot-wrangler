@@ -26,8 +26,8 @@ fi
 runtime="$(command -v docker || command -v podman || true)"
 if [ -z "$runtime" ]; then
   echo "==> no docker/podman — skipping container smoke"
-  [ "$fail" -eq 0 ] && echo "provision tests OK (static only)" || { echo "provision tests FAILED"; exit 1; }
-  exit 0
+  if [ "$fail" -eq 0 ]; then echo "provision tests OK (static only)"; exit 0; fi
+  echo "provision tests FAILED"; exit 1
 fi
 
 echo "==> container smoke ($runtime, ubuntu:24.04, double run)"
@@ -41,7 +41,7 @@ echo "==> container smoke ($runtime, ubuntu:24.04, double run)"
   cp /files/provision.sh /opt/robot/provision.sh && chmod 0755 /opt/robot/provision.sh
   cat > /opt/robot/provision.env <<EOF
 ROBOT_USER=robot
-GIT_AUTHOR_NAME='"'"'Test User'"'"'
+GIT_AUTHOR_NAME=robot-test
 GIT_AUTHOR_EMAIL=test@example.com
 TS_HOSTNAME=robot
 TS_TAGS=tag:server
@@ -58,4 +58,4 @@ EOF
   echo "container smoke OK"
 ' || fail=1
 
-[ "$fail" -eq 0 ] && echo "provision tests OK" || { echo "provision tests FAILED"; exit 1; }
+if [ "$fail" -eq 0 ]; then echo "provision tests OK"; else echo "provision tests FAILED"; exit 1; fi

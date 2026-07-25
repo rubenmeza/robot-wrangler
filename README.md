@@ -65,7 +65,43 @@ it never lands in cloud metadata. The on-box [CLAUDE.md](files/CLAUDE.md.tmpl) t
 security model so it won't try to "helpfully" open a port. Full rationale in
 [ADR 0001](docs/adr/0001-no-public-ingress.md).
 
-## Re-provisioning / adding a device
+## Rebuild & verify
 
-Changing `cloud-init` or adding a `devices/*.pub` means a fresh box:
-`make robot-destroy && make robot-wrangler`. The box is cattle; keep anything precious in git.
+The box is **cattle** — changing `cloud-init`, adding a `devices/*.pub`, or switching the
+multiplexer profile all mean a fresh box. Keep anything precious in git; the robot delivers work as
+PRs, so committed work is safe on GitHub.
+
+```bash
+make robot-destroy              # tofu destroy (type: yes)
+```
+Then, because the Tailscale auth key is **single-use** and the old node lingers:
+
+1. **Mint a fresh Tailscale key** (Reusable OFF · Ephemeral OFF · Pre-approved ON · `tag:server`)
+   → `.env` `TF_VAR_tailscale_authkey`.
+2. **Delete the stale `robot` node** in the Tailscale admin console → Machines. Otherwise the new
+   box registers as `robot-1` and `robot-ip`/`robot-attach` can't find it (false timeout).
+
+```bash
+make preflight                  # tools, secrets, tailnet, doctl — plus a non-ASCII guard on the
+                                # cloud-init templates (a stray em-dash once voided the whole config)
+make robot-wrangler             # provision → join tailnet → push tokens. Hands-off, ~5–8 min.
+```
+
+Verify it came up **turnkey** (no manual steps):
+
+```bash
+IP=$(make robot-ip)
+ssh -i ~/.ssh/robot_ed25519 -o IdentitiesOnly=yes robot@$IP \
+  'export PATH=$HOME/.local/bin:$PATH; herdr --version; claude --version; grep -o hasCompletedOnboarding ~/.claude.json'
+# expect: herdr <ver> · claude <ver> · hasCompletedOnboarding
+
+make robot-attach               # drops straight into the herdr 'robot' session
+# then, in a pane:  claude      # no theme/login wizard → authed via the pushed token; say hi
+```
+
+### If `robot-wrangler` hangs on "waiting for tailnet IP"
+
+Stale node not deleted (step 2), or a spent/wrong key in `.env`. There is **no public SSH** by
+design, so read the boot log out-of-band: DO droplet `robot` → **Recovery Console** (noVNC) → log
+in as `robot` with your console password (`TF_VAR_robot_console_password_hash`, see
+[ADR 0005](docs/adr/0005-console-break-glass-password.md)) → `sudo tail -80 /var/log/cloud-init-output.log`.

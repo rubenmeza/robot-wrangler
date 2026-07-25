@@ -51,6 +51,13 @@ variable "robot_multiplexer" {
   }
 }
 
+variable "robot_console_password_hash" {
+  description = "SHA-512 crypt hash of a console-ONLY password for the robot user (break-glass, ADR 0005). Enables login at DigitalOcean's out-of-band web console when the tailnet is unreachable. SSH password auth stays disabled, so this is never usable over the network. Empty = account stays password-locked (no console login). Generate: openssl passwd -6. Set via TF_VAR_robot_console_password_hash in .env (single-quote it — it contains $)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "backups" {
   description = "Enable DigitalOcean daily droplet backups (+20% of droplet price)."
   type        = bool

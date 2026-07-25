@@ -26,7 +26,15 @@ users:
     # Convenience passwordless sudo: acceptable because reaching this user already requires
     # a device key AND being on the tailnet. Tighten if your threat model differs.
     sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    # Break-glass: a console-ONLY password (ADR 0005). SSH password auth stays disabled
+    # (see 99-robot-hardening.conf below), so this hash is usable only at DigitalOcean's
+    # out-of-band web console, never over the network. Empty hash => stay password-locked.
+%{ if console_pw_hash != "" ~}
+    lock_passwd: false
+    passwd: '${console_pw_hash}'
+%{ else ~}
     lock_passwd: true
+%{ endif ~}
     ssh_authorized_keys:
 %{ for key in ssh_pubkeys ~}
       - ${key}
@@ -41,6 +49,14 @@ write_files:
       PermitRootLogin no
       PubkeyAuthentication yes
 
+  - path: /etc/needrestart/conf.d/90-noninteractive.conf
+    permissions: '0644'
+    content: |
+      # First boot runs apt non-interactively. Without this, needrestart pops a whiptail
+      # "pending kernel upgrade" dialog that fails on cloud-init's non-tty and spams the log.
+      $nrconf{restart} = 'a';
+      $nrconf{kernelhints} = -1;
+
   # defer: write this AFTER the user exists (config stage), not in the early write_files
   # stage. Otherwise cloud-init creates /home/${robot_user} as root before the user exists,
   # leaving a root-owned home the robot user can't write to, and drops this file because the
@@ -50,6 +66,19 @@ write_files:
     permissions: '0644'
     encoding: b64
     content: ${claude_md_b64}
+    defer: true
+
+  # Pre-complete Claude Code's interactive onboarding. Without this, the first interactive
+  # `claude` runs a theme + LOGIN wizard that opens a browser for OAuth -- which a headless
+  # box can't do. CLAUDE_CODE_OAUTH_TOKEN (pushed post-boot) authenticates headless modes but
+  # NOT the interactive TUI's onboarding. Marking onboarding done makes the TUI skip the wizard
+  # and authenticate straight from the token. claude fills in the rest (userID, machineID, ...)
+  # on first run. defer: write after the user's home exists.
+  - path: /home/${robot_user}/.claude.json
+    owner: ${robot_user}:${robot_user}
+    permissions: '0600'
+    content: |
+      {"hasCompletedOnboarding": true, "theme": "dark"}
     defer: true
 
   - path: /opt/robot/install-claude.sh
@@ -98,10 +127,12 @@ runcmd:
   - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
   - apt-get update
   - apt-get install -y gh
-  # Clear password aging on the robot account. lock_passwd leaves the shadow last-change
-  # field unset, which PAM account management treats as "expired" — that makes the
-  # `sudo -u ${robot_user}` below fail with "unable to change expired password", so the
-  # installer silently never runs. Set last-change=today and disable min/max/inactive/expire.
+  # Clear password aging on BOTH root and the robot account. cloud-init leaves the shadow
+  # last-change field at epoch 0, which PAM account management treats as "password must be
+  # changed". `sudo -u ${robot_user}` is invoked AS ROOT below, and PAM trips on ROOT's expiry
+  # first -- "unable to change expired password" -- so the installer silently never runs. Set
+  # last-change=today and disable min/max/inactive/expire for both accounts.
+  - chage -d $(date +%Y-%m-%d) -m 0 -M -1 -I -1 -E -1 root
   - chage -d $(date +%Y-%m-%d) -m 0 -M -1 -I -1 -E -1 ${robot_user}
   # Install the agent as the robot user (not root).
   - sudo -u ${robot_user} -H bash /opt/robot/install-claude.sh

@@ -23,6 +23,7 @@ locals {
     git_author_name   = var.git_author_name
     git_author_email  = var.git_author_email
     multiplexer       = var.robot_multiplexer
+    console_pw_hash   = var.robot_console_password_hash
   })
 }
 

@@ -6,16 +6,16 @@ _load_env
 
 ip="$(_ip)"; [ -n "$ip" ] || { echo "robot not on the tailnet" >&2; exit 1; }
 
-# Multiplexer + transport are a coupled profile fixed at provision time (ADR 0003):
-#   herdr -> plain SSH (full-fidelity Rust/Ratatui TUI, agent-state kanban)
-#   tmux  -> mosh       (battle-proven, survives cellular drops)
-# Both land every device in the SAME shared `robot` session, so handoff is unaffected.
-# (herdr auto-attaches via .bashrc on login, so a bare interactive shell would also work;
-#  we ask explicitly here so a non-login ssh still lands in the session.)
+# Open an INTERACTIVE login; the box's ~/.bashrc auto-attaches the shared `robot` session in the
+# provisioned multiplexer (ADR 0003). We deliberately do NOT pass an explicit `-- <mux> ...`:
+# that runs non-interactively, skips ~/.bashrc, and can't resolve ~/.local/bin/herdr on PATH
+# ("herdr: command not found"). Letting .bashrc drive keeps robot-attach, a bare ssh, and Moshi
+# all identical. Transport follows the profile:
+#   herdr -> plain SSH (full-fidelity Rust/Ratatui TUI)
+#   tmux  -> mosh       (survives cellular drops)
 if [ "$(_mux)" = herdr ]; then
-  exec ssh -t -i "$(_key)" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
-    "$(_host)@$ip" -- herdr --session robot
+  exec ssh -t -i "$(_key)" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new "$(_host)@$ip"
 else
   exec mosh --ssh="ssh -i $(_key) -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
-    "$(_host)@$ip" -- tmux new -A -s robot
+    "$(_host)@$ip"
 fi

@@ -1,25 +1,25 @@
-# CLAUDE.md — robot server operating brief
+# CLAUDE.md -- robot server operating brief
 
 You are Claude Code running headless on a remote server. Read this fully before acting.
 
 ## What this machine is
 - DigitalOcean droplet **${hostname}**, ${size}, ${region}, Ubuntu 24.04.
 - Provisioned as infrastructure by OpenTofu from the human's laptop (repo: robot-wrangler). You do NOT manage the cloud infra from here.
-- You run as user **${robot_user}** inside a **${multiplexer}** session (the multiplexer) so work survives disconnects. Every device auto-attaches the SAME shared `robot` session — the human may be watching live from a phone or tablet; do not kill or rename it.
+- You run as user **${robot_user}** inside a **${multiplexer}** session (the multiplexer) so work survives disconnects. Every device auto-attaches the SAME shared `robot` session -- the human may be watching live from a phone or tablet; do not kill or rename it.
 
 ## How it is reached (do not break this)
 - The box is reachable ONLY over Tailscale (tagged ${ts_tags}). There is NO public ingress.
 - A DigitalOcean cloud firewall DENIES ALL inbound traffic. SSH is key-only; root login and passwords are disabled.
-- The human connects from a laptop (native terminal) and a Pixel + iPad (the Moshi app) — each with its own SSH key.
+- The human connects from a laptop (native terminal) and a Pixel + iPad (the Moshi app) -- each with its own SSH key.
 
 ## Standing security rules (NEVER violate; do not "fix" the setup)
 1. NEVER open a public port, expose a service to 0.0.0.0, or change the DigitalOcean firewall.
-2. NEVER enable public SSH, password auth, or root login.
+2. NEVER enable public SSH, SSH/network password auth, or root login. (A console-ONLY password may exist for out-of-band break-glass at the provider console -- that is deliberate; do NOT disable it, and do NOT extend password auth to SSH.)
 3. New services bind to localhost (127.0.0.1) or the Tailscale interface (100.x) ONLY.
 4. If a task appears to REQUIRE public ingress, STOP and ask the human. Do not work around it.
 5. Confirm before destructive actions: rm -rf, deleting data, dropping databases, resizing, or anything you cannot undo.
 6. The file ~/.robot-env holds secret auth tokens (Claude subscription + a GitHub PAT). Never print, log, commit, or exfiltrate the file or the tokens in it ($CLAUDE_CODE_OAUTH_TOKEN, $GH_TOKEN).
-7. GitHub: deliver work ONLY as a feature branch + pull request. NEVER push to `main` or a protected branch, and never merge your own PR — the human reviews and merges (ADR 0002).
+7. GitHub: deliver work ONLY as a feature branch + pull request. NEVER push to `main` or a protected branch, and never merge your own PR -- the human reviews and merges (ADR 0002).
 
 ## Conventions
 - Put projects under /home/${robot_user}/projects/<name>, one ${multiplexer} session each for long-running work.
@@ -27,7 +27,7 @@ You are Claude Code running headless on a remote server. Read this fully before 
 - Prefer boring, reversible changes. This box is a pet you tend, not a lab to trash.
 
 ## GitHub
-- You act as the human's own GitHub identity. `gh` is installed and authenticated from $GH_TOKEN (a classic PAT, `repo` scope) in ~/.robot-env; `git` talks to github.com over HTTPS through it. No login step needed — it just works.
+- You act as the human's own GitHub identity. `gh` is installed and authenticated from $GH_TOKEN (a classic PAT, `repo` scope) in ~/.robot-env; `git` talks to github.com over HTTPS through it. No login step needed -- it just works.
 - Working an issue: read it (`gh issue view`), branch, commit, push, open a PR (`gh pr create`) linked to the issue. Never write to `main` directly (rule 7).
 - Clone on demand under /home/${robot_user}/projects/<name>. The token reaches the human's personal and organization repos.
 - The token's scope is `repo` only: you CANNOT delete repos, edit CI/`.github/workflows`, or manage orgs. If a task seems to need more, STOP and ask the human (rule 4).

@@ -23,8 +23,8 @@ selects both, so the two never mismatch.
 
 ## Consequences
 
-- `robot-attach.sh` and the on-box `.bashrc` auto-attach branch on `MUX` for BOTH the multiplexer
-  command and the transport.
+- `robot-attach.sh` branches on `MUX` for the transport; the on-box auto-attach command lives in
+  the `/etc/profile.d/10-robot.sh` drop-in, with `MUX` baked in at provision time (ADR 0006).
 - `MUX` lives in `.env` (`TF_VAR_...`), the single source read by both OpenTofu and the attach
   scripts.
 - Verify on first herdr build: concurrent multi-client attach (two devices, one live pane) — the

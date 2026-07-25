@@ -1,0 +1,24 @@
+# /etc/profile.d/10-robot.sh -- robot login-shell setup (ADR 0006). Rendered from
+# files/profile.d-robot.sh.tftpl; the multiplexer profile (ADR 0003) is baked in at provision
+# time. Sourced by /etc/profile for login shells (ssh and mosh both start login shells).
+#
+# Only the robot user gets the agent PATH, secret env, and auto-attach. Root (break-glass console,
+# ADR 0005) is deliberately excluded -- otherwise a console login would auto-attach a root-owned
+# 'robot' session.
+[ "$(id -un)" = "${robot_user}" ] || return 0
+
+export PATH="$HOME/.local/bin:$PATH"
+
+# Secret auth tokens (Claude subscription + GitHub PAT), pushed post-boot over SSH into this file.
+[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"
+
+# Auto-attach the shared 'robot' session on interactive login, so every device (laptop / phone /
+# iPad) lands in the SAME live session and can hand off mid-work (ADR 0003). Guarded against
+# nesting: $TMUX inside tmux, $HERDR_ENV inside herdr.
+if [ -n "$PS1" ] && [ -z "$TMUX" ] && [ -z "$HERDR_ENV" ]; then
+  if [ "${multiplexer}" = herdr ] && command -v herdr >/dev/null; then
+    herdr --session robot
+  elif command -v tmux >/dev/null; then
+    tmux new -A -s robot
+  fi
+fi

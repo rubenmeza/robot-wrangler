@@ -27,15 +27,14 @@ if ! ls devices/*.pub >/dev/null 2>&1; then
   echo "MISSING: at least one devices/*.pub — you would lock yourself out. See devices/README.md"; fail=1
 fi
 
-# Cloud-init is delivered via DigitalOcean's ConfigDrive datasource, whose YAML loader rejects
-# non-ASCII bytes: a single stray em-dash once decoded to a U+0080 control char and silently
-# voided the ENTIRE #cloud-config ("empty cloud config"), so the box booted unconfigured (no
-# user, no keys, no tailnet). Keep the directly-rendered templates pure ASCII.
-for f in cloud-init.yaml.tftpl files/CLAUDE.md.tmpl; do
-  if ! python3 -c "import sys; sys.exit(0 if all(b<0x80 for b in open('$f','rb').read()) else 1)"; then
-    echo "NON-ASCII in $f — cloud-init would reject the whole config. Replace smart punctuation (— ' \" …) with ASCII."; fail=1
-  fi
-done
+# The old non-ASCII gate is gone: every dynamic cloud-init payload now ships base64 (encoding: b64,
+# see ADR 0006), so a stray em-dash can no longer void the #cloud-config. Instead, lint the
+# Provisioner — the one real script — if shellcheck is present.
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck files/provision.sh || { echo "shellcheck flagged files/provision.sh"; fail=1; }
+else
+  echo "optional: shellcheck (pacman -S shellcheck) — to lint files/provision.sh"
+fi
 
 key="$(_key)"
 [ -f "$key" ] || { echo "MISSING: ssh private key $key (set ROBOT_SSH_KEY or create it — see devices/README.md)"; fail=1; }

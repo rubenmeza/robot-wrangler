@@ -82,8 +82,8 @@ Then, because the Tailscale auth key is **single-use** and the old node lingers:
    box registers as `robot-1` and `robot-ip`/`robot-attach` can't find it (false timeout).
 
 ```bash
-make preflight                  # tools, secrets, tailnet, doctl — plus a non-ASCII guard on the
-                                # cloud-init templates (a stray em-dash once voided the whole config)
+make preflight                  # tools, secrets, tailnet, doctl — plus a shellcheck of the
+                                # Provisioner (files/provision.sh, ADR 0006)
 make robot-wrangler             # provision → join tailnet → push tokens. Hands-off, ~5–8 min.
 ```
 

@@ -1,7 +1,11 @@
 #cloud-config
-# Runs once, on first boot, as root. The box is already firewalled shut to the public
-# internet at this point, so everything here is outbound-only. Tailscale is what makes
-# the box reachable afterwards.
+# The MANIFEST: WHAT the box has on first boot (packages, user, files). All imperative HOW lives
+# in the Provisioner (files/provision.sh), invoked by the single runcmd at the end. See ADR 0006.
+#
+# The box is already firewalled shut to the public internet here, so everything is outbound-only;
+# Tailscale (brought up by the Provisioner) is what makes it reachable afterwards. Every dynamic
+# payload below ships `encoding: b64`, so no non-ASCII byte can reach this YAML and void the whole
+# #cloud-config the way a stray em-dash once did.
 
 package_update: true
 package_upgrade: true
@@ -13,9 +17,8 @@ packages:
   - jq
   - ca-certificates
 
-# Don't force a password change on first login. Without this, cloud-init's default
-# password expiry marks the locked robot account "expired", which breaks `sudo -u robot`
-# (used below to install the agent) and the robot user's own NOPASSWD sudo.
+# Don't force a password change on first login. Without this, cloud-init's default password
+# expiry marks the locked robot account "expired", which breaks the robot user's NOPASSWD sudo.
 chpasswd:
   expire: false
 
@@ -23,12 +26,12 @@ users:
   - name: ${robot_user}
     groups: [sudo]
     shell: /bin/bash
-    # Convenience passwordless sudo: acceptable because reaching this user already requires
-    # a device key AND being on the tailnet. Tighten if your threat model differs.
+    # Convenience passwordless sudo: acceptable because reaching this user already requires a
+    # device key AND being on the tailnet. Tighten if your threat model differs.
     sudo: ['ALL=(ALL) NOPASSWD:ALL']
-    # Break-glass: a console-ONLY password (ADR 0005). SSH password auth stays disabled
-    # (see 99-robot-hardening.conf below), so this hash is usable only at DigitalOcean's
-    # out-of-band web console, never over the network. Empty hash => stay password-locked.
+    # Break-glass: a console-ONLY password (ADR 0005). SSH password auth stays disabled (see
+    # 99-robot-hardening.conf below), so this hash is usable only at DigitalOcean's out-of-band
+    # web console, never over the network. Empty hash => stay password-locked.
 %{ if console_pw_hash != "" ~}
     lock_passwd: false
     passwd: '${console_pw_hash}'
@@ -57,10 +60,35 @@ write_files:
       $nrconf{restart} = 'a';
       $nrconf{kernelhints} = -1;
 
-  # defer: write this AFTER the user exists (config stage), not in the early write_files
-  # stage. Otherwise cloud-init creates /home/${robot_user} as root before the user exists,
-  # leaving a root-owned home the robot user can't write to, and drops this file because the
-  # ${robot_user} owner can't yet be resolved.
+  # Login-shell setup for the robot user: agent PATH, secret env, auto-attach (ADR 0003).
+  - path: /etc/profile.d/10-robot.sh
+    permissions: '0644'
+    encoding: b64
+    content: ${profile_d_b64}
+
+  # The Provisioner: all imperative first-boot HOW (ADR 0006). Run as root by runcmd below.
+  - path: /opt/robot/provision.sh
+    permissions: '0755'
+    encoding: b64
+    content: ${provision_sh_b64}
+
+  # Non-secret config the Provisioner sources.
+  - path: /opt/robot/provision.env
+    permissions: '0600'
+    encoding: b64
+    content: ${provision_env_b64}
+
+  # Single-use tailnet auth key on its own 0600 channel. The Provisioner reads it, joins the
+  # tailnet, then shreds it. Already single-use + tagged, so a leaked user_data blob yields only
+  # a spent key (ADR 0001).
+  - path: /opt/robot/.ts-authkey
+    permissions: '0600'
+    encoding: b64
+    content: ${authkey_b64}
+
+  # The Handover brief that primes every agent session (ADR terms: Handover). defer: write AFTER
+  # the user exists, else cloud-init creates /home/${robot_user} as root and the robot user can't
+  # write to its own home.
   - path: /home/${robot_user}/CLAUDE.md
     owner: ${robot_user}:${robot_user}
     permissions: '0644'
@@ -68,12 +96,8 @@ write_files:
     content: ${claude_md_b64}
     defer: true
 
-  # Pre-complete Claude Code's interactive onboarding. Without this, the first interactive
-  # `claude` runs a theme + LOGIN wizard that opens a browser for OAuth -- which a headless
-  # box can't do. CLAUDE_CODE_OAUTH_TOKEN (pushed post-boot) authenticates headless modes but
-  # NOT the interactive TUI's onboarding. Marking onboarding done makes the TUI skip the wizard
-  # and authenticate straight from the token. claude fills in the rest (userID, machineID, ...)
-  # on first run. defer: write after the user's home exists.
+  # Pre-complete Claude Code's interactive onboarding so the headless TUI skips the browser OAuth
+  # wizard and authenticates straight from the pushed token. defer: needs the user's home.
   - path: /home/${robot_user}/.claude.json
     owner: ${robot_user}:${robot_user}
     permissions: '0600'
@@ -81,60 +105,5 @@ write_files:
       {"hasCompletedOnboarding": true, "theme": "dark"}
     defer: true
 
-  - path: /opt/robot/install-claude.sh
-    permissions: '0755'
-    content: |
-      #!/usr/bin/env bash
-      set -euo pipefail
-      # Claude Code native installer (installs to ~/.local/bin/claude).
-      curl -fsSL https://claude.ai/install.sh | bash
-      # herdr: agent-aware multiplexer (ADR 0003), installed like claude into ~/.local/bin.
-      # tmux+mosh come from apt (packages:); herdr ships its own installer. Both multiplexers
-      # are always present; the profile only decides which one auto-attach launches. The
-      # auto-attach block guards on `command -v herdr`, so a failed install falls back to tmux.
-      curl -fsSL https://herdr.dev/install.sh | sh
-      # Ensure the agent picks up its auth token (pushed later, over SSH) and its binary.
-      touch "$HOME/.bashrc"
-      grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" \
-        || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-      grep -qxF '[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"' "$HOME/.bashrc" \
-        || echo '[ -f "$HOME/.robot-env" ] && . "$HOME/.robot-env"' >> "$HOME/.bashrc"
-      # Auto-attach the shared 'robot' session on interactive login, so every device
-      # (laptop / phone / iPad) lands in the SAME live Claude session and can hand off mid-work.
-      # The multiplexer is fixed at provision time (ADR 0003): herdr if selected and present,
-      # else tmux. Guarded against nesting: $TMUX inside tmux, $HERDR_ENV inside herdr.
-      grep -qF 'auto-attach robot session' "$HOME/.bashrc" \
-        || printf '\n# auto-attach the shared robot session on interactive login (ADR 0003)\nif [ -n "$PS1" ] && [ -z "$TMUX" ] && [ -z "$HERDR_ENV" ]; then\n  if [ "${multiplexer}" = herdr ] && command -v herdr >/dev/null; then\n    herdr --session robot\n  elif command -v tmux >/dev/null; then\n    tmux new -A -s robot\n  fi\nfi\n' >> "$HOME/.bashrc"
-      # Git identity: the robot's commits are authored as the owner (ADR 0002).
-      git config --global user.name "${git_author_name}"
-      git config --global user.email "${git_author_email}"
-      # Route github.com HTTPS auth through gh, which reads GH_TOKEN from ~/.robot-env (pushed
-      # post-boot over SSH). gh is installed via apt before this script runs.
-      git config --global --replace-all credential.https://github.com.helper '!gh auth git-credential'
-      git config --global --replace-all credential.https://gist.github.com.helper '!gh auth git-credential'
-
 runcmd:
-  # Apply the SSH hardening drop-in.
-  - [systemctl, restart, ssh]
-  # Join the tailnet with the single-use, pre-authorized, tagged key. Tagged => no key expiry.
-  - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --authkey='${tailscale_authkey}' --hostname='${ts_hostname}' --advertise-tags='${ts_tags}'
-  # Install GitHub CLI from its official apt repo (not in Ubuntu's default repos). The agent uses
-  # it to read issues and open PRs, and git uses it as the github.com credential helper.
-  - install -m 0755 -d /etc/apt/keyrings
-  - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  - chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
-  - apt-get update
-  - apt-get install -y gh
-  # Clear password aging on BOTH root and the robot account. cloud-init leaves the shadow
-  # last-change field at epoch 0, which PAM account management treats as "password must be
-  # changed". `sudo -u ${robot_user}` is invoked AS ROOT below, and PAM trips on ROOT's expiry
-  # first -- "unable to change expired password" -- so the installer silently never runs. Set
-  # last-change=today and disable min/max/inactive/expire for both accounts.
-  - chage -d $(date +%Y-%m-%d) -m 0 -M -1 -I -1 -E -1 root
-  - chage -d $(date +%Y-%m-%d) -m 0 -M -1 -I -1 -E -1 ${robot_user}
-  # Install the agent as the robot user (not root).
-  - sudo -u ${robot_user} -H bash /opt/robot/install-claude.sh
-  # Readiness marker the laptop polls for before pushing the auth token.
-  - mkdir -p /opt/robot && touch /opt/robot/.provisioned
+  - [bash, /opt/robot/provision.sh]

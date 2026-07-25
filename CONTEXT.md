@@ -55,6 +55,13 @@ credentials that can open a session on the box. Never one shared key.
 The on-box briefing document (`CLAUDE.md`) that tells the agent what the box is, how it is
 reached, and the standing rules it must never break. Priming, not configuration.
 
+### Provisioner
+The single ordered first-boot script (`files/provision.sh`) that turns a bare, born-locked droplet
+into the robot: joins the tailnet, installs the agent and multiplexer, sets the git identity, marks
+readiness. It is the imperative *how*, split out from the cloud-init *manifest* — the declarative
+*what* (packages, user, files) that ships it and invokes it with one line. Runs once as root;
+shellcheck-clean and container-runnable. See ADR 0006.
+
 ### Break-glass
 The only recovery path if the tailnet route is lost: the provider's out-of-band web console.
 Not an everyday door.

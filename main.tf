@@ -13,17 +13,37 @@ locals {
     multiplexer = var.robot_multiplexer
   })
 
+  # Non-secret config the Provisioner sources at runtime (ADR 0006). Keeps render-time values out
+  # of provision.sh, which ships verbatim so it stays shellcheck-clean and container-runnable.
+  provision_env = templatefile("${path.module}/files/provision.env.tftpl", {
+    robot_user       = var.robot_user
+    git_author_name  = var.git_author_name
+    git_author_email = var.git_author_email
+    ts_hostname      = var.ts_hostname
+    ts_tags          = var.ts_tags
+  })
+
+  # Login-shell drop-in: PATH, secret env, and the auto-attach target (the multiplexer profile,
+  # ADR 0003, baked in at provision time).
+  profile_d = templatefile("${path.module}/files/profile.d-robot.sh.tftpl", {
+    robot_user  = var.robot_user
+    multiplexer = var.robot_multiplexer
+  })
+
+  # The Provisioner ships VERBATIM (no templatefile) so it is a real, lintable, runnable script.
+  provision_sh = file("${path.module}/files/provision.sh")
+
+  # The manifest is a thin list of WHAT. Every dynamic payload is base64'd (encoding: b64), so no
+  # non-ASCII byte can ever void the #cloud-config.
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
     robot_user        = var.robot_user
-    tailscale_authkey = var.tailscale_authkey
-    ts_hostname       = var.ts_hostname
-    ts_tags           = var.ts_tags
     ssh_pubkeys       = local.device_pubkeys
-    claude_md_b64     = base64encode(local.claude_md)
-    git_author_name   = var.git_author_name
-    git_author_email  = var.git_author_email
-    multiplexer       = var.robot_multiplexer
     console_pw_hash   = var.robot_console_password_hash
+    claude_md_b64     = base64encode(local.claude_md)
+    provision_sh_b64  = base64encode(local.provision_sh)
+    provision_env_b64 = base64encode(local.provision_env)
+    profile_d_b64     = base64encode(local.profile_d)
+    authkey_b64       = base64encode(var.tailscale_authkey)
   })
 }
 

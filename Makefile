@@ -1,4 +1,4 @@
-.PHONY: help preflight robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status
+.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status
 .DEFAULT_GOAL := help
 
 help: ## show this help
@@ -7,6 +7,10 @@ help: ## show this help
 
 preflight: ## check deps, secrets, local tailnet, and doctl auth
 	@./scripts/preflight.sh
+
+test: ## run the script tests (Provisioner smoke + _common unit tests)
+	@./scripts/test-common.sh
+	@./scripts/test-provision.sh
 
 robot-wrangler: ## provision the box, join the tailnet, push the agent token (idempotent)
 	@./scripts/robot-wrangler.sh

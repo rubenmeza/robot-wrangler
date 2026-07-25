@@ -4,5 +4,5 @@ cd "$(dirname "$0")/.."
 source scripts/_common.sh
 _load_env
 
-ip="$(_ip)"; [ -n "$ip" ] || { echo "robot not on the tailnet" >&2; exit 1; }
+ip="$(_require_ip)" || exit 1
 exec _ssh "$(_host)@$ip" "$@"

@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 source scripts/_common.sh
 _load_env
 
-ip="$(_ip)"; [ -n "$ip" ] || { echo "robot not on the tailnet" >&2; exit 1; }
+ip="$(_require_ip)" || exit 1
 
 # Open an INTERACTIVE login; the box's /etc/profile.d/10-robot.sh auto-attaches the shared `robot`
 # session in the provisioned multiplexer (ADR 0003). We deliberately do NOT pass an explicit

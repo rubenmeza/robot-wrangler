@@ -28,12 +28,13 @@ if ! ls devices/*.pub >/dev/null 2>&1; then
 fi
 
 # The old non-ASCII gate is gone: every dynamic cloud-init payload now ships base64 (encoding: b64,
-# see ADR 0006), so a stray em-dash can no longer void the #cloud-config. Instead, lint the
-# Provisioner — the one real script — if shellcheck is present.
+# see ADR 0006), so a stray em-dash can no longer void the #cloud-config. Instead, lint the real
+# scripts if shellcheck is present.
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck files/provision.sh || { echo "shellcheck flagged files/provision.sh"; fail=1; }
+  # Gate on warning+ only; info/style notes (e.g. intentional single-quoted remote commands) don't fail.
+  shellcheck --severity=warning scripts/*.sh files/provision.sh || { echo "shellcheck flagged a script"; fail=1; }
 else
-  echo "optional: shellcheck (pacman -S shellcheck) — to lint files/provision.sh"
+  echo "optional: shellcheck (pacman -S shellcheck) — to lint the scripts"
 fi
 
 key="$(_key)"

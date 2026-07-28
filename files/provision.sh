@@ -82,6 +82,10 @@ install_agent() {
       curl -fsSL https://claude.ai/install.sh | bash
       # herdr: agent-aware multiplexer (ADR 0003), installed like claude into ~/.local/bin.
       curl -fsSL https://herdr.dev/install.sh | sh
+      # moshi-hook: on-box daemon that bridges Claude Code hooks -> Moshi push notifications
+      # (ADR 0007). The binary is token-independent; pairing + the user service happen post-boot,
+      # once MOSHI_PAIRING_TOKEN is on the box (scripts/robot-auth.sh).
+      curl -fsSL https://getmoshi.app/install.sh | sh
       # Git identity: the robot commits as the owner (ADR 0002).
       git config --global user.name "$GIT_AUTHOR_NAME"
       git config --global user.email "$GIT_AUTHOR_EMAIL"
@@ -89,6 +93,14 @@ install_agent() {
       git config --global --replace-all credential.https://github.com.helper "!gh auth git-credential"
       git config --global --replace-all credential.https://gist.github.com.helper "!gh auth git-credential"
     '
+}
+
+# Let the robot user's systemd --user services run without an active login. moshi-hook installs
+# itself as a --user service (ADR 0007); linger is what keeps it running after the provisioning SSH
+# session ends and across reboots. Harmless when Moshi is unused (no user service is installed).
+enable_linger() {
+  if skip_host; then echo "skip: loginctl enable-linger (SKIP_HOST)"; return; fi
+  loginctl enable-linger "$ROBOT_USER"
 }
 
 # Readiness marker the laptop polls (wait-ready.sh) before pushing the agent token over SSH.
@@ -104,6 +116,7 @@ main() {
   install_gh
   fix_password_aging
   install_agent
+  enable_linger
   mark_provisioned
   echo "provisioned"
 }

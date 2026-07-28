@@ -21,6 +21,9 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
   [ADR 0004](docs/adr/0004-moshi-mobile-client.md)). Transport follows the profile: herdr over
   plain SSH, tmux over **mosh** for sessions that survive network drops. Every device auto-attaches
   the **same** live `robot` session, so you can hand off mid-work between them.
+- **Push notifications** for agent events. The on-box `moshi-hook` daemon relays Claude Code's
+  "task done / needs input" to Moshi on your phone even when the app is closed
+  (see [ADR 0007](docs/adr/0007-moshi-hook-push.md)). Optional — set `MOSHI_PAIRING_TOKEN` to enable.
 
 ## One-time setup
 
@@ -41,7 +44,8 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
    claude setup-token        # paste output into CLAUDE_CODE_OAUTH_TOKEN
    ```
    Fill `DIGITALOCEAN_TOKEN`, `TF_VAR_tailscale_authkey` (one-time, pre-approved, `tag:server`),
-   `CLAUDE_CODE_OAUTH_TOKEN`.
+   `CLAUDE_CODE_OAUTH_TOKEN`. Optional: `MOSHI_PAIRING_TOKEN` (Moshi app -> Settings -> Hooks) for
+   push notifications — see [ADR 0007](docs/adr/0007-moshi-hook-push.md).
 
 ## Use
 
@@ -81,6 +85,10 @@ Then, because the Tailscale auth key is **single-use** and the old node lingers:
 2. **Delete the stale `robot` node** in the Tailscale admin console → Machines. Otherwise the new
    box registers as `robot-1` and `robot-ip`/`robot-attach` can't find it (false timeout).
 
+Moshi push re-pairs automatically from `MOSHI_PAIRING_TOKEN` in `.env` (no action needed). If the
+new box doesn't report `paired`, mint a fresh token in the app (Settings → Hooks) and re-run
+`make robot-auth` (ADR 0007).
+
 ```bash
 make preflight                  # tools, secrets, tailnet, doctl — plus a shellcheck of the
                                 # Provisioner (files/provision.sh, ADR 0006)
@@ -92,8 +100,10 @@ Verify it came up **turnkey** (no manual steps):
 ```bash
 IP=$(make robot-ip)
 ssh -i ~/.ssh/robot_ed25519 -o IdentitiesOnly=yes robot@$IP \
-  'export PATH=$HOME/.local/bin:$PATH; herdr --version; claude --version; grep -o hasCompletedOnboarding ~/.claude.json'
-# expect: herdr <ver> · claude <ver> · hasCompletedOnboarding
+  'export PATH=$HOME/.local/bin:$PATH; export XDG_RUNTIME_DIR=/run/user/$(id -u)
+   herdr --version; claude --version; grep -o hasCompletedOnboarding ~/.claude.json
+   moshi-hook status | grep -iE "status:|Pro"'
+# expect: herdr <ver> · claude <ver> · hasCompletedOnboarding · status: paired · Moshi Pro attached
 
 make robot-attach               # drops straight into the herdr 'robot' session
 # then, in a pane:  claude      # no theme/login wizard → authed via the pushed token; say hi

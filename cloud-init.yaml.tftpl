@@ -51,6 +51,12 @@ write_files:
       KbdInteractiveAuthentication no
       PermitRootLogin no
       PubkeyAuthentication yes
+      # Probe idle clients and reap dead ones after ~60s. Mobile (Moshi) connections drop without
+      # a clean FIN; without this, sshd keeps the half-open session and the app's reconnect hits
+      # "failed to open channel" reusing it (ADR 0007).
+      ClientAliveInterval 20
+      ClientAliveCountMax 3
+      TCPKeepAlive yes
 
   - path: /etc/needrestart/conf.d/90-noninteractive.conf
     permissions: '0644'

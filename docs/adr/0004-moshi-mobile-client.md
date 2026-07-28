@@ -1,5 +1,9 @@
 # Moshi as the mobile control-surface client
 
+> **Amended by [ADR 0007](0007-moshi-hook-push.md):** the notification path here ("Moshi push
+> (free) + herdr agent-state", "client only, never installed on the box", "$0 free tier") was
+> revised — push requires the on-box `moshi-hook` daemon, and the project moved to Moshi Pro.
+
 The Pixel and iPad reach the box through **Moshi** (a closed-source iOS/Android terminal app),
 replacing Blink (iPad) and Termux (Pixel). It speaks SSH/mosh over the tailnet and drives whatever
 Multiplexer the box runs — it is a client only, never installed on the box. The laptop keeps its

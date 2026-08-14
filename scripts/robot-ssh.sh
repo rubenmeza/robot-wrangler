@@ -5,4 +5,4 @@ source scripts/_common.sh
 _load_env
 
 ip="$(_require_ip)" || exit 1
-exec _ssh "$(_host)@$ip" "$@"
+_ssh "$(_host)@$ip" "$@"

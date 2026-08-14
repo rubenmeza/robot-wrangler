@@ -17,6 +17,8 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
 - **Claude Code** installed and authed with *your subscription* (no API billing), running inside a
   multiplexer so it survives disconnects — **herdr** by default (agent-aware TUI) or classic
   **tmux**, picked at provision time (see [ADR 0003](docs/adr/0003-multiplexer-profile-at-provision-time.md)).
+- **OpenAI Codex CLI** as a second agent, also authed from *your ChatGPT subscription* (no API
+  billing), sharing the same session (optional; see [ADR 0008](docs/adr/0008-codex-agent.md)).
 - Reach it from your **laptop** (native ssh) and your **Pixel + iPad** (the **Moshi** app, see
   [ADR 0004](docs/adr/0004-moshi-mobile-client.md)). Transport follows the profile: herdr over
   plain SSH, tmux over **mosh** for sessions that survive network drops. Every device auto-attaches
@@ -45,7 +47,8 @@ automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md))
    ```
    Fill `DIGITALOCEAN_TOKEN`, `TF_VAR_tailscale_authkey` (one-time, pre-approved, `tag:server`),
    `CLAUDE_CODE_OAUTH_TOKEN`. Optional: `MOSHI_PAIRING_TOKEN` (Moshi app -> Settings -> Hooks) for
-   push notifications — see [ADR 0007](docs/adr/0007-moshi-hook-push.md).
+   push notifications — see [ADR 0007](docs/adr/0007-moshi-hook-push.md). Optional: `CODEX_AUTH_JSON`
+   (path to a `codex login` auth.json) to run Codex too — see [ADR 0008](docs/adr/0008-codex-agent.md).
 
 ## Use
 
@@ -102,8 +105,10 @@ IP=$(make robot-ip)
 ssh -i ~/.ssh/robot_ed25519 -o IdentitiesOnly=yes robot@$IP \
   'export PATH=$HOME/.local/bin:$PATH; export XDG_RUNTIME_DIR=/run/user/$(id -u)
    herdr --version; claude --version; grep -o hasCompletedOnboarding ~/.claude.json
-   moshi-hook status | grep -iE "status:|Pro"'
-# expect: herdr <ver> · claude <ver> · hasCompletedOnboarding · status: paired · Moshi Pro attached
+   codex --version; codex login status
+   moshi-hook status | grep -iE "status:|Pro|codex"'
+# expect: herdr <ver> · claude <ver> · hasCompletedOnboarding · codex <ver> · Logged in using ChatGPT
+#         · status: paired · Moshi Pro attached · codex current
 
 make robot-attach               # drops straight into the herdr 'robot' session
 # then, in a pane:  claude      # no theme/login wizard → authed via the pushed token; say hi

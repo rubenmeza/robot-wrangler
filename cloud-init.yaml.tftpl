@@ -16,6 +16,9 @@ packages:
   - git
   - jq
   - ca-certificates
+  # Codex CLI sandboxes tool calls with bubblewrap; without it Codex falls back to a bundled copy
+  # and warns on every run (ADR 0008).
+  - bubblewrap
 
 # Don't force a password change on first login. Without this, cloud-init's default password
 # expiry marks the locked robot account "expired", which breaks the robot user's NOPASSWD sudo.

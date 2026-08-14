@@ -21,6 +21,14 @@ ip="$(_require_ip)" || exit 1
   fi
 } | _ssh "$(_host)@$ip" 'umask 077; cat > "$HOME/.robot-env" && echo "tokens installed on box"'
 
+# Optional: Codex CLI subscription auth (ADR 0008). CODEX_AUTH_JSON points to a local ~/.codex/
+# auth.json captured from a `codex login` (or `codex login --device-auth`). Pushed to the box so the
+# headless Codex TUI runs authed from your ChatGPT subscription — no API billing. Codex refreshes
+# the token on the box. Treat the file like a password; it never touches git or metadata.
+if [ -n "${CODEX_AUTH_JSON:-}" ] && [ -f "$CODEX_AUTH_JSON" ]; then
+  _ssh "$(_host)@$ip" 'umask 077; mkdir -p "$HOME/.codex"; cat > "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json" && echo "codex auth installed on box"' < "$CODEX_AUTH_JSON"
+fi
+
 # Optional: wire Moshi push notifications (ADR 0007). MOSHI_PAIRING_TOKEN comes from the Moshi app
 # (Settings -> Hooks). Pair the on-box moshi-hook daemon, install the Claude Code hooks
 # (PreToolUse/Notification/Stop), and (re)install its linger-backed --user service. Idempotent, so

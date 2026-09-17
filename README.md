@@ -58,10 +58,17 @@ make robot-wrangler   # provision + join tailnet + push token   (idempotent)
 make robot-attach   # attach the shared 'robot' session (herdr/ssh or tmux/mosh per profile); then run: claude
 make robot-ssh      # plain ssh over the tailnet
 make robot-status   # droplet + tailnet status
+make robot-update   # confirm OS package maintenance; runs independently on the box
+make robot-update-status # progress, failures, log path, and pending reboot
 make robot-destroy  # tear it all down
 ```
 
 From then on you just `make robot-attach` from any device and tell Claude what you want.
+
+For package maintenance, finish or stop agent work before confirming `make robot-update`.
+Services and sessions may be interrupted. This initial slice reports pending reboots but does
+not reboot, update Herdr, or verify session activation. See the
+[maintenance operator guide](docs/robot-update-operations.md) for status, logs, and retry behavior.
 
 ## How it stays safe
 

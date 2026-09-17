@@ -86,7 +86,7 @@ install_agent() {
       # (ADR 0007). The binary is token-independent; pairing + the user service happen post-boot,
       # once MOSHI_PAIRING_TOKEN is on the box (scripts/robot-auth.sh).
       curl -fsSL https://getmoshi.app/install.sh | sh
-      # Codex CLI: OpenAI's coding agent, standalone installer (no Node) into ~/.local/bin/codex
+      # Codex CLI: the OpenAI coding agent, standalone installer (no Node) into ~/.local/bin/codex
       # (ADR 0008). Auth is a subscription auth.json pushed post-boot, same channel as the other
       # secrets; the binary here is credential-independent.
       curl -fsSL https://chatgpt.com/codex/install.sh | sh

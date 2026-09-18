@@ -7,12 +7,18 @@ the prompt to start. Any other answer (including end of input) cancels without m
 changes. The command uses the same hostname and SSH device key as `make robot-ssh`.
 
 The update runs as a root systemd service on the box, independently of SSH. Once accepted by
-systemd it continues if the Control surface disconnects. If the connection drops during launch,
-check status before retrying: the service may already have started.
+systemd it continues if the Control surface disconnects, including requesting any required
+reboot after successful updates. The local command follows progress until final verification
+completes or fails. If the connection drops during launch, it checks persisted state instead of
+blindly submitting another update. Each invocation has a persisted request ID, so an uncertain
+launch cannot mistake a previous operation's completion for its own. If no operation was
+recorded for that request, the command fails and asks for a rerun.
 
 Use `make robot-update-status` to inspect the latest operation without starting maintenance.
 Invoking `make robot-update` while an operation is active reports it instead of starting another.
-After an operation ends, another confirmed invocation starts a new attempt. Completed package
+After full completion, another confirmed invocation starts a new operation. If updates finished
+but reboot/access/session verification is pending or failed, a confirmed rerun resumes that
+same operation. Completed package
 changes are retained; there is no rollback. A retry first configures unpacked packages, then
 refreshes package indexes and upgrades installed packages, then updates Herdr and verifies the
 configured shared session. Failures stop subsequent steps.
@@ -23,8 +29,8 @@ previous binary's path, session verification, the pending reboot marker, and the
 path. `Herdr installed` is the version observed at the start of this attempt; `Herdr target` is
 the release this attempt installs and activates. Operations and logs are retained under `/var/lib/robot-update/operations/`
 on the box. Read the reported log with `make robot-ssh` and `sudo cat <log-path>`.
-If the box reboots or the worker is killed before it records an outcome, status reports the
-operation as interrupted; inspect its log before retrying.
+An unexpected worker interruption is reported explicitly; inspect its log before retrying.
+An expected reboot has its own persisted state and is not reported as an update failure.
 
 Maintenance updates packages using the box's existing APT repositories within the current
 Ubuntu release. It does not change repository configuration, run a release upgrade, rebuild the
@@ -67,9 +73,50 @@ user's Herdr config before activation. The prior config is retained as `herdr-co
 in the operation directory, and unrelated settings are preserved. This setting remains disabled
 for subsequent attachments; restart agents deliberately after maintenance.
 
-Retries resolve the stable release again. If that version is already installed, they skip the
-download/replacement, retain the previous binary backup, and retry activation/verification.
-If the target server is already healthy, they verify it without restarting it.
+Retries after an update failure resolve the stable release again. If that version is already
+installed, they skip download/replacement and retain the previous binary backup. Once all
+update steps have succeeded, retries reuse that operation's recorded target and verify without
+repeating package work or release discovery. If the target server is already healthy, they
+verify it without restarting it.
+
+## Reboot, reconnection, and completion
+
+The initial confirmation authorizes a reboot when `/var/run/reboot-required` exists after
+successful package, Herdr, and session steps. Failures in those steps stop maintenance and
+report the marker instead of rebooting. The box saves and flushes the operation and boot ID
+before requesting an asynchronous reboot with
+[`systemctl reboot --no-block`](https://manpages.ubuntu.com/manpages/noble/man1/systemctl.1.html).
+
+The Control surface waits up to five minutes for return and final verification. Tailnet
+resolution, individual SSH attempts, and polling sleeps are bounded by the remaining budget;
+healthy package installation is not limited to five minutes. A reboot is considered observed
+only after the kernel boot ID changes. A reconnect to the old boot cannot complete the update.
+
+After the box returns, the command launches a detached verifier for the persisted operation.
+It checks the installed Herdr version against the saved target, retains the provisioned profile,
+starts the configured `robot` session if needed, and checks attachment. A newly created tmux
+session, like Herdr, inherits the Robot's existing agent credentials. Previous agents are not
+automatically resumed. If the reboot marker remains after a new boot, verification fails rather
+than rebooting repeatedly. The no-reboot path also requires session and SSH access checks.
+
+| State | Meaning and next action |
+| --- | --- |
+| `queued` / `running` | An on-box worker is active; a second start reports it. |
+| `awaiting-reboot` | Updates succeeded and reboot was requested; wait for a different boot ID. |
+| `awaiting-access` | On-box session checks passed; the next successful command poll verifies SSH access. |
+| `complete` | Updates, expected Herdr version, configured session, and SSH access passed. |
+| `failed` / `interrupted` | Inspect the failing phase and log. `Update steps: completed` distinguishes final verification failures from update failures. |
+
+`make robot-update-status` is read-only; it reports state without advancing it. Use
+`make robot-update` to resume pending verification after closing the Control surface. No boot
+service repeats maintenance automatically: persisted state waits for the command to reconnect.
+If a live SSH reply is lost after completion, polling reports that same completed operation.
+
+Reconnection timeout exits unsuccessfully and says whether updates were known to have completed
+or their outcome could not be obtained. This is separate from a reported package/Herdr failure;
+the unreachable box's state is not overwritten. Open **DigitalOcean → robot droplet → Recovery
+Console**, inspect boot/networking, Tailscale, and SSH, then rerun `make robot-update`. The
+persisted operation can finish verification without reinstalling completed updates.
 
 ## Manual recovery
 
@@ -114,6 +161,5 @@ Then, on Herdr-profile boxes, stop any running Herdr server and attach again. On
 boxes, keep using tmux. Retained binaries and logs are not deleted on retry. Check the log and
 pending reboot before deciding whether to retry the update or recover manually.
 
-**Successful installation and session verification are not full maintenance completion.**
-The command reports `/var/run/reboot-required` even on failure, but does not reboot automatically
-or verify access after reboot. Automated reboot/reconnection handling belongs to issue #3.
+Only `complete` means maintenance passed every required check. Logs, previous binaries, and
+pending-reboot reports remain available after failures; automatic rollback is not performed.

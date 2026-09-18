@@ -20,7 +20,7 @@ class RobotUpdateTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / "scripts").mkdir()
         (self.root / "files").mkdir()
-        for name in ("_common.sh", "robot-update.sh"):
+        for name in ("_common.sh", "robot-update.sh", "robot-ip.sh"):
             source = ROOT / "scripts" / name
             if source.exists():
                 shutil.copy(source, self.root / "scripts" / name)
@@ -35,10 +35,12 @@ class RobotUpdateTests(unittest.TestCase):
             "ROBOT_UPDATE_REBOOT_FILE": str(self.root / "reboot-required"),
             "ROBOT_UPDATE_PROVISION_FILE": str(self.root / "provision.env"),
             "ROBOT_UPDATE_PROFILE_FILE": str(self.root / "profile.sh"),
+            "ROBOT_UPDATE_BOOT_FILE": str(self.root / "boot-id"),
             "TEST_ROBOT_HOME": str(self.root / "home"),
             "TEST_ROOT": str(self.root),
         }
         self.home = self.root / "home"
+        (self.root / "boot-id").write_text("boot-before\n")
         (self.home / ".local/bin").mkdir(parents=True)
         (self.home / ".robot-env").write_text(
             'export CLAUDE_CODE_OAUTH_TOKEN=dummy-claude\nexport GH_TOKEN=dummy-github\n')
@@ -77,6 +79,10 @@ cp "$source" "$output"
         self.stub("dpkg", 'echo "configured packages"\n')
         self.stub("apt-get", 'echo "packages: $*"\n')
         self.stub("systemctl", '''
+if [ "$1" = reboot ]; then
+  echo reboot >> "$TEST_ROOT/reboots"
+  exit 0
+fi
 if [ -f "$ROBOT_UPDATE_DIR/service-active" ]; then echo active; exit 0; fi
 echo inactive
 exit 3
@@ -173,15 +179,151 @@ fi
                 self.assertNotIn("unexpected-ssh", result.stderr)
                 self.assertFalse((self.root / "state").exists())
 
+    def test_reboot_waits_for_new_boot_and_resumes_without_repeating_updates(self):
+        (self.root / "reboot-required").touch()
+        self.remote("start")
+        before = self.finished()
+        self.assertIn("State: awaiting-reboot", before.stdout)
+        self.assertEqual((self.root / "reboots").read_text(), "reboot\n")
+        repeated = self.remote("start")
+        self.assertEqual(before.stdout.splitlines()[0], repeated.stdout.splitlines()[0])
+        self.assertEqual((self.root / "reboots").read_text(), "reboot\n")
+        self.stub("apt-get", 'echo repeated-package-work >&2; exit 99\n')
+        self.stub("curl", 'echo repeated-release-discovery >&2; exit 99\n')
+        (self.root / "boot-id").write_text("boot-after\n")
+        (self.root / "reboot-required").unlink()
+        self.remote("poll")
+        self.finished()
+        result = self.remote("poll")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("State: complete", result.stdout)
+        self.assertIn("verify-access", result.stdout)
+        self.assertEqual(before.stdout.splitlines()[0], result.stdout.splitlines()[0])
+
+    def connect_locally(self):
+        self.stub("tailscale", 'echo \'{"Peer":{"robot":{"HostName":"robot","TailscaleIPs":["100.64.0.9"]}}}\'\n')
+        self.stub("ssh", '''
+command="${*: -1}"
+read -ra args <<< "${command#sudo -n bash -s -- }"
+bash -s -- "${args[@]}"
+''')
+        self.env["ROBOT_UPDATE_POLL_SECONDS"] = "0.05"
+
+    def test_no_reboot_command_waits_for_final_access_check(self):
+        self.connect_locally()
+        result = self.local("yes\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("State: complete", result.stdout)
+        self.assertIn("verify-access", result.stdout)
+        self.assertFalse((self.root / "reboots").exists())
+
+    def test_failed_new_launch_cannot_claim_an_older_completed_operation(self):
+        self.connect_locally()
+        self.assertEqual(self.local("yes\n").returncode, 0)
+        self.stub("ssh", '''
+command="${*: -1}"
+if [[ "$command" == *'-- start'* ]]; then exit 255; fi
+read -ra args <<< "${command#sudo -n bash -s -- }"
+bash -s -- "${args[@]}"
+''')
+        result = self.local("yes\n")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("State: complete", result.stdout)
+
+    def test_reconnection_timeout_is_bounded_and_rerun_finishes_same_operation(self):
+        self.connect_locally()
+        self.env["ROBOT_UPDATE_RECONNECT_SECONDS"] = "2"
+        (self.root / "reboot-required").touch()
+        self.stub("ssh", '''
+if [ -f "$TEST_ROOT/hang-next" ]; then sleep 20; exit 255; fi
+command="${*: -1}"
+read -ra args <<< "${command#sudo -n bash -s -- }"
+bash -s -- "${args[@]}"
+if [ -f "$TEST_ROOT/reboots" ]; then touch "$TEST_ROOT/hang-next"; fi
+''')
+        started = time.monotonic()
+        result = self.local("yes\n")
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 4, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Updates completed, but reconnection/final verification timed out", result.stderr)
+        self.assertIn("Recovery Console", result.stderr)
+        self.stub("apt-get", 'exit 99\n')
+        self.stub("curl", 'exit 99\n')
+        self.connect_locally()
+        (self.root / "boot-id").write_text("boot-returned\n")
+        (self.root / "reboot-required").unlink()
+        result = self.local("yes\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("State: complete", result.stdout)
+        self.assertEqual(len(list((self.root / "state/operations").iterdir())), 1)
+
+    def test_post_reboot_activation_failure_can_retry_without_reinstalling(self):
+        self.profile("herdr")
+        (self.root / "reboot-required").touch()
+        self.remote("start")
+        self.assertIn("State: awaiting-reboot", self.finished().stdout)
+        (self.root / "boot-id").write_text("boot-returned\n")
+        (self.root / "reboot-required").unlink()
+        (self.root / "herdr-running").unlink()
+        (self.root / "fail-herdr-start").touch()
+        self.remote("poll")
+        failed = self.finished()
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("Failed/interrupted step: activate-session", failed.stdout)
+        self.assertIn("Update steps: completed", failed.stdout)
+        self.assertIn("session attach robot", failed.stdout)
+        self.assertIn("Restore the previous binary", failed.stdout)
+        (self.root / "fail-herdr-start").unlink()
+        self.stub("apt-get", 'exit 99\n')
+        self.stub("curl", 'exit 99\n')
+        self.remote("start")
+        self.finished()
+        self.assertIn("State: complete", self.remote("poll").stdout)
+
+    def test_tmux_session_created_after_reboot_inherits_agent_credentials(self):
+        (self.root / "reboot-required").touch()
+        self.remote("start")
+        self.assertIn("State: awaiting-reboot", self.finished().stdout)
+        self.stub("tmux", '''
+case "$1" in
+  has-session) exit 1 ;;
+  new-session)
+    [ "${CLAUDE_CODE_OAUTH_TOKEN:-}" = dummy-claude ] && [ "${GH_TOKEN:-}" = dummy-github ]
+    ;;
+  display-message) echo robot ;;
+esac
+''')
+        (self.root / "boot-id").write_text("boot-returned\n")
+        (self.root / "reboot-required").unlink()
+        self.remote("poll")
+        result = self.finished()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("State: complete", self.remote("poll").stdout)
+
+    def test_reboot_request_failure_is_retryable_without_package_changes(self):
+        (self.root / "reboot-required").touch()
+        systemctl = (self.bin / "systemctl").read_text()
+        (self.bin / "systemctl").write_text(systemctl.replace('echo reboot >> "$TEST_ROOT/reboots"', 'exit 42'))
+        self.remote("start")
+        failed = self.finished()
+        self.assertEqual(failed.returncode, 1)
+        self.assertIn("Failed/interrupted step: reboot", failed.stdout)
+        self.assertIn("Update steps: completed", failed.stdout)
+        (self.bin / "systemctl").write_text(systemctl)
+        self.stub("apt-get", 'exit 99\n')
+        self.remote("start")
+        self.assertIn("State: awaiting-reboot", self.finished().stdout)
+
     def test_package_success_persists_steps_log_and_pending_reboot(self):
         (self.root / "reboot-required").touch()
         started = self.remote("start")
         self.assertEqual(started.returncode, 0, started.stderr)
         result = self.finished()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for expected in ("updated-session-verified", "configure-packages", "update-indexes",
+        for expected in ("awaiting-reboot", "configure-packages", "update-indexes",
                          "upgrade-packages", "Pending reboot: yes",
-                         "Full maintenance completion is not verified"):
+                         "Maintenance is not complete"):
             self.assertIn(expected, result.stdout)
         log = Path(next(line.removeprefix("Log: ") for line in result.stdout.splitlines()
                         if line.startswith("Log: "))).read_text()
@@ -197,7 +339,7 @@ fi
 ''')
         self.remote("start")
         result = self.finished()
-        self.assertIn("State: updated-session-verified", result.stdout)
+        self.assertIn("State: awaiting-access", result.stdout)
 
     def test_tmux_profile_updates_herdr_preserves_backup_and_verifies_tmux(self):
         original = self.herdr_binary.read_bytes()
@@ -275,7 +417,7 @@ exec /usr/bin/mv "$@"
         self.assertIn("Previous Herdr binary:", result.stdout)
         (self.bin / "mv").unlink()
         self.remote("start")
-        self.assertIn("State: updated-session-verified", self.finished().stdout)
+        self.assertIn("State: awaiting-access", self.finished().stdout)
 
     def test_activation_failure_retains_update_and_backup_then_retries_without_download(self):
         self.profile("herdr")
@@ -289,6 +431,7 @@ exec /usr/bin/mv "$@"
         self.assertIn("session attach robot", failed.stdout)
         self.assertIn("Restore the previous binary", failed.stdout)
         self.assertIn("Pending reboot: yes", failed.stdout)
+        self.assertFalse((self.root / "reboots").exists())
         backup = Path(next(line.removeprefix("Previous Herdr binary: ")
                            for line in failed.stdout.splitlines()
                            if line.startswith("Previous Herdr binary: ")))
@@ -380,7 +523,7 @@ fi
         self.assertEqual(self.remote("start").returncode, 0)
         retried = self.finished()
         self.assertEqual(retried.returncode, 0, retried.stdout)
-        self.assertIn("State: updated-session-verified", retried.stdout)
+        self.assertIn("State: awaiting-reboot", retried.stdout)
         self.assertNotEqual(failed.stdout.splitlines()[0], retried.stdout.splitlines()[0])
         self.assertIn("controlled package failure", old_log.read_text())
 
@@ -406,28 +549,21 @@ while [ ! -f "$ROBOT_UPDATE_DIR/release" ]; do sleep 0.03; done
             (self.root / "state/release").touch()
             finished = self.finished()
         self.assertEqual(finished.returncode, 0, finished.stdout)
-        self.assertIn("State: updated-session-verified", finished.stdout)
+        self.assertIn("State: awaiting-access", finished.stdout)
 
-    def test_connection_loss_after_launch_does_not_stop_worker(self):
-        self.stub("tailscale", 'echo \'{"Peer":{"robot":{"HostName":"robot","TailscaleIPs":["100.64.0.9"]}}}\'\n')
+    def test_connection_loss_after_launch_resumes_existing_operation(self):
+        self.connect_locally()
         self.stub("ssh", '''
 command="${*: -1}"
-bash -s -- "${command##* }"
-if [[ "$command" == *start ]]; then exit 255; fi
+read -ra args <<< "${command#sudo -n bash -s -- }"
+bash -s -- "${args[@]}"
+if [[ "$command" == *'-- start'* ]]; then exit 255; fi
 ''')
-        self.stub("apt-get", '''
-while [ ! -f "$ROBOT_UPDATE_DIR/release" ]; do sleep 0.03; done
-echo 'package work survived disconnection'
-''')
-        try:
-            result = self.local("yes\n")
-            self.assertEqual(result.returncode, 255, result.stdout + result.stderr)
-            self.assertIn("maintenance may still be running", result.stderr)
-            self.assertIn("Active: yes", self.local("", "status").stdout)
-        finally:
-            (self.root / "state/release").touch()
-            finished = self.finished()
-        self.assertIn("State: updated-session-verified", finished.stdout)
+        result = self.local("yes\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Connection unavailable", result.stderr)
+        self.assertIn("State: complete", result.stdout)
+        self.assertEqual(len(list((self.root / "state/operations").iterdir())), 1)
 
     def test_killed_worker_is_reported_interrupted_and_retry_is_safe(self):
         self.stub("apt-get", 'kill -KILL "$PPID"\n')
@@ -438,7 +574,7 @@ echo 'package work survived disconnection'
         self.assertIn("Failed/interrupted step: update-indexes", result.stdout)
         self.stub("apt-get", 'echo repaired\n')
         self.remote("start")
-        self.assertIn("State: updated-session-verified", self.finished().stdout)
+        self.assertIn("State: awaiting-access", self.finished().stdout)
 
     def test_launch_failure_is_recorded_and_status_does_not_start_work(self):
         self.assertIn("No maintenance operation", self.remote("status").stdout)

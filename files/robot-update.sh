@@ -6,10 +6,18 @@ root="${ROBOT_UPDATE_DIR:-/var/lib/robot-update}"
 reboot_file="${ROBOT_UPDATE_REBOOT_FILE:-/var/run/reboot-required}"
 provision_file="${ROBOT_UPDATE_PROVISION_FILE:-/opt/robot/provision.env}"
 profile_file="${ROBOT_UPDATE_PROFILE_FILE:-/etc/profile.d/10-robot.sh}"
+boot_file="${ROBOT_UPDATE_BOOT_FILE:-/proc/sys/kernel/random/boot_id}"
+request_id="${2:-}"
+if [ -n "$request_id" ] && ! [[ "$request_id" =~ ^[a-zA-Z0-9_-]{1,100}$ ]]; then
+  echo 'Invalid maintenance request ID.' >&2
+  exit 2
+fi
 
 disable_agent_resume() {
   local config="$robot_home/.config/herdr/config.toml"
-  if [ -f "$config" ]; then cp -p "$config" "$operation/herdr-config.previous"; fi
+  if [ -f "$config" ] && [ ! -f "$operation/herdr-config.previous" ]; then
+    cp -p "$config" "$operation/herdr-config.previous"
+  fi
   # Preserve unrelated TOML verbatim and validate the complete document before replacing it.
   as_robot python3 - "$config" <<'PY'
 import copy, os, pathlib, re, sys, tempfile, tomllib
@@ -69,9 +77,7 @@ verify_attachment() {
   [ "$rc" -eq 124 ]
 }
 
-maintain_herdr() {
-  step=inspect-profile
-  save_state running
+load_robot() {
   # Read the box's provisioned identity/profile, never the Control surface's .env.
   # shellcheck source=/dev/null
   source "$provision_file"
@@ -79,6 +85,17 @@ maintain_herdr() {
   [ -n "$robot_home" ] && [ -d "$robot_home" ]
   profile="$(sed -nE 's/^  if \[ "(herdr|tmux)" = herdr \].*/\1/p' "$profile_file")"
   case "$profile" in herdr|tmux) ;; *) echo 'Unrecognized on-box multiplexer profile'; return 1 ;; esac
+  as_robot() {
+    sudo -H -u "$ROBOT_USER" env "HOME=$robot_home" \
+      "PATH=$robot_home/.local/bin:$PATH" "XDG_RUNTIME_DIR=/run/user/$(id -u "$ROBOT_USER")" "$@"
+  }
+  binary="$robot_home/.local/bin/herdr"
+}
+
+maintain_herdr() {
+  step=inspect-profile
+  save_state running
+  load_robot
   echo "$profile" > "$operation/profile"
   binary="$robot_home/.local/bin/herdr"
   echo "$binary" > "$operation/binary"
@@ -93,10 +110,6 @@ maintain_herdr() {
   if [ -e "$maintenance_root/previous-herdr" ]; then
     readlink -f "$maintenance_root/previous-herdr" > "$operation/backup"
   fi
-  as_robot() {
-    sudo -H -u "$ROBOT_USER" env "HOME=$robot_home" \
-      "PATH=$robot_home/.local/bin:$PATH" "XDG_RUNTIME_DIR=/run/user/$(id -u "$ROBOT_USER")" "$@"
-  }
   installed="$(as_robot "$binary" --version)"
   installed="${installed#herdr }"
   echo "$installed" > "$operation/installed"
@@ -138,10 +151,20 @@ maintain_herdr() {
     candidate=''
     echo "$step" >> "$operation/completed"
   fi
+  activate_session
+}
+
+activate_session() {
   step=activate-session
   save_state running
   if [ "$profile" = tmux ]; then
-    as_robot tmux has-session -t =robot || as_robot tmux new-session -d -s robot
+    if ! as_robot tmux has-session -t =robot; then
+      # shellcheck disable=SC2016 # Read credentials inside the Robot-user shell.
+      as_robot /bin/bash -eu -c '
+        if [ -f "$HOME/.robot-env" ]; then . "$HOME/.robot-env"; fi
+        exec tmux new-session -d -s robot
+      '
+    fi
     [ "$(as_robot tmux display-message -p -t =robot '#{session_name}')" = robot ]
   else
     disable_agent_resume
@@ -188,6 +211,9 @@ worker() {
   reboot_file="$2"
   provision_file="$3"
   profile_file="$4"
+  boot_file="$5"
+  mode="$6"
+  outcome=awaiting-access
   candidate=''
   step=starting
   exec >> "$operation/operation.log" 2>&1
@@ -200,7 +226,11 @@ worker() {
     local rc=$?
     trap - EXIT
     if [ -n "$candidate" ]; then rm -f -- "$candidate"; fi
-    if [ "$rc" -eq 0 ]; then save_state updated-session-verified; else save_state failed; fi
+    if [ "$rc" -eq 0 ] || [ "$outcome" = awaiting-reboot ]; then
+      save_state "$outcome"
+    else
+      save_state failed
+    fi
     if [ -f "$reboot_file" ]; then
       echo 'yes' > "$operation/reboot-required"
     else
@@ -213,6 +243,20 @@ worker() {
   trap finish EXIT
   trap 'exit 143' TERM
   trap 'exit 130' INT
+  if [ "$mode" = verify ]; then
+    step=final-verification
+    save_state running
+    rm -f "$operation/verified"
+    expected_profile="$(cat "$operation/profile")"
+    expected_binary="$(cat "$operation/binary")"
+    target="$(cat "$operation/target")"
+    load_robot
+    [ "$profile" = "$expected_profile" ] && [ "$binary" = "$expected_binary" ]
+    [ "$(as_robot "$binary" --version)" = "herdr $target" ]
+    activate_session
+    finish_updates
+    exit 0
+  fi
   export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
   step=configure-packages
   save_state running
@@ -230,13 +274,43 @@ worker() {
   apt-get -y --with-new-pkgs -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade
   echo "$step" >> "$operation/completed"
   maintain_herdr
+  : > "$operation/updates-completed"
+  finish_updates
   exit 0
+}
+
+finish_updates() {
+  if [ -f "$reboot_file" ]; then
+    step=reboot
+    # Never loop through reboots if the reboot marker survives an actual new boot.
+    if [ -f "$operation/boot-before" ] &&
+      [ "$(cat "$operation/boot-before")" != "$(cat "$boot_file")" ]; then
+      echo 'Reboot remains required after restart; inspect the box before retrying.'
+      return 1
+    fi
+    cat "$boot_file" > "$operation/boot-before"
+    outcome=awaiting-reboot
+    save_state "$outcome"
+    sync -f "$operation"
+    if systemctl reboot --no-block; then
+      echo 'Reboot requested; completed updates are preserved. Awaiting a new boot and SSH verification.'
+    else
+      rc=$?
+      outcome=failed
+      return "$rc"
+    fi
+  else
+    cat "$boot_file" > "$operation/verified-boot"
+    outcome=awaiting-access
+  fi
 }
 
 # Unknown systemd errors fail closed: never infer that it is safe to start a second worker.
 active() {
-  local state
-  state="$(systemctl is-active "robot-update-$(basename "$operation").service")" || true
+  local state unit
+  unit="robot-update-$(basename "$operation").service"
+  if [ -f "$operation/unit" ]; then unit="$(cat "$operation/unit")"; fi
+  state="$(systemctl is-active "$unit")" || true
   case "$state" in
     active|activating|reloading|deactivating) return 0 ;;
     inactive|failed|unknown) return 1 ;;
@@ -287,8 +361,57 @@ report() {
       echo 'No automatic rollback was performed.'
     fi
   fi
-  echo 'Full maintenance completion is not verified; automatic reboot/access verification is not implemented.'
+  if [ -f "$operation/updates-completed" ]; then echo 'Update steps: completed'; fi
+  if [ "$state" = complete ]; then
+    echo 'Maintenance complete: updates, configured session, and SSH access verified.'
+  else
+    echo 'Maintenance is not complete; inspect the state and any pending reboot.'
+  fi
   [ "$state" != failed ] && [ "$state" != interrupted ]
+}
+
+launch_worker() {
+  local mode="$1" unit
+  unit="robot-update-$(basename "$operation")-$(date +%s%N).service"
+  echo "$unit" > "$operation/unit"
+  printf 'queued %s\n' "$mode" > "$operation/state"
+  if systemd-run --quiet --collect --unit="$unit" \
+    --property=Type=exec /bin/bash "$operation/worker.sh" "$operation" "$reboot_file" \
+    "$provision_file" "$profile_file" "$boot_file" "$mode" >> "$operation/operation.log" 2>&1; then
+    report
+  else
+    printf 'failed launch\n' > "$operation/state"
+    report
+    return 1
+  fi
+}
+
+# Called under the launch lock. A successful SSH poll is the final access check.
+resume_operation() {
+  local state step
+  if active; then report; return; fi
+  read -r state step < "$operation/state"
+  if [ "$state" = awaiting-reboot ] &&
+    [ "$(cat "$operation/boot-before")" = "$(cat "$boot_file")" ]; then
+    report
+  elif [ "$state" = awaiting-access ] &&
+    [ "$(cat "$operation/verified-boot")" = "$(cat "$boot_file")" ] && [ ! -f "$reboot_file" ]; then
+    echo verify-access >> "$operation/completed"
+    printf 'complete verify-access\n' > "$operation/state.tmp"
+    mv "$operation/state.tmp" "$operation/state"
+    report
+  elif [ "$state" = awaiting-reboot ] || [ "$state" = awaiting-access ] || [ "${1:-}" = retry ]; then
+    launch_worker verify
+  else
+    report
+  fi
+}
+
+bind_request() {
+  if [ -n "$request_id" ]; then
+    mkdir -p "$root/requests"
+    ln -s "$operation" "$root/requests/$request_id"
+  fi
 }
 
 case "${1:-}" in
@@ -300,29 +423,48 @@ case "${1:-}" in
     operation="$(readlink -f "$root/current")"
     report
     ;;
+  poll)
+    if [ ! -e "$root/current" ]; then echo 'No maintenance operation recorded; rerun make robot-update.'; exit 1; fi
+    exec 9< "$root/launch.lock"
+    flock -x 9
+    if [ -n "$request_id" ]; then
+      if [ ! -e "$root/requests/$request_id" ]; then
+        echo 'No operation recorded for this request; rerun make robot-update.'
+        exit 1
+      fi
+      operation="$(readlink -f "$root/requests/$request_id")"
+    else
+      operation="$(readlink -f "$root/current")"
+    fi
+    resume_operation
+    ;;
   start)
     mkdir -p "$root/operations"
     exec 9> "$root/launch.lock"
     flock 9
+    if [ -n "$request_id" ] && [ -e "$root/requests/$request_id" ]; then
+      operation="$(readlink -f "$root/requests/$request_id")"
+      resume_operation
+      exit
+    fi
     if [ -e "$root/current" ]; then
       operation="$(readlink -f "$root/current")"
-      if active; then report; exit; fi
+      if active; then bind_request; report; exit; fi
+      read -r state _ < "$operation/state"
+      if [ -f "$operation/updates-completed" ] && [ "$state" != complete ]; then
+        bind_request
+        resume_operation retry
+        exit
+      fi
     fi
     operation="$(mktemp -d "$root/operations/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
     printf 'queued launch\n' > "$operation/state"
     : > "$operation/completed"
     : > "$operation/operation.log"
-    { printf '#!/usr/bin/env bash\n'; declare -f worker maintain_herdr disable_agent_resume verify_attachment; printf 'worker "$@"\n'; } > "$operation/worker.sh"
+    { printf '#!/usr/bin/env bash\n'; declare -f worker maintain_herdr load_robot activate_session disable_agent_resume verify_attachment finish_updates; printf 'worker "$@"\n'; } > "$operation/worker.sh"
     ln -sfn "$operation" "$root/current"
-    if systemd-run --quiet --collect --unit="robot-update-$(basename "$operation")" \
-      --property=Type=exec /bin/bash "$operation/worker.sh" "$operation" "$reboot_file" "$provision_file" "$profile_file" \
-      >> "$operation/operation.log" 2>&1; then
-      report
-    else
-      printf 'failed launch\n' > "$operation/state"
-      report
-      exit 1
-    fi
+    bind_request
+    launch_worker update
     ;;
-  *) echo 'Usage: robot-update.sh start|status' >&2; exit 2 ;;
+  *) echo 'Usage: robot-update.sh start|status|poll' >&2; exit 2 ;;
 esac

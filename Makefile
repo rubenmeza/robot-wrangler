@@ -31,10 +31,10 @@ robot-auth: ## (re)push the Claude Code subscription token over SSH
 robot-ip: ## print the box's tailnet IP
 	@./scripts/robot-ip.sh
 
-robot-update: ## confirm and start persistent OS package maintenance on the box
+robot-update: ## confirm and start persistent OS package + Herdr maintenance
 	@./scripts/robot-update.sh
 
-robot-update-status: ## report the latest package maintenance operation
+robot-update-status: ## report the latest maintenance operation
 	@./scripts/robot-update.sh status
 
 robot-status: ## show droplet + tailnet status

@@ -8,7 +8,8 @@ case "$action" in
   start)
     echo 'Finish or stop agent work before updating the Robot.'
     echo 'Maintenance may interrupt sessions, restart services, and require a reboot.'
-    read -r -p 'Start OS package maintenance? Type yes: ' answer || answer=''
+    echo 'Herdr may restart; previous agents do not automatically resume.'
+    read -r -p 'Start OS package and Herdr maintenance? Type yes: ' answer || answer=''
     if [ "$answer" != yes ]; then
       echo 'Maintenance cancelled; no changes made.'
       exit 0

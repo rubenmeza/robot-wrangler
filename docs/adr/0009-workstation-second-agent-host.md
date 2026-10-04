@@ -53,7 +53,7 @@ machines with different contents.
   independent of ufw.
 - Three rules no code enforces: the lid stays up; agent work starts *inside* tmux or it cannot go
   mobile; a device that can reach the bench can hop to the box from it.
-- The bench inherits no [PR-only delivery](../../CONTEXT.md) rule. That rule protects the owner from
+- The bench inherits no [PR-only delivery](../../GLOSSARY.md) rule. That rule protects the owner from
   a sealed agent acting unsupervised; on the bench the owner is the operator, and a rule that only
   binds while mobile is unenforceable anyway — nothing on the box knows where the owner is sitting.
 - Push (ADR 0007) applies to both hosts: `moshi-hook` runs on the bench too, always, so a bench agent

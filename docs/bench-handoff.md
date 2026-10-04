@@ -1,7 +1,7 @@
 # Handoff — implementing the open bench
 
 Design is settled and recorded: see [ADR 0009](adr/0009-workstation-second-agent-host.md) and the
-`Agent host` / `Workstation (the bench)` / `Open bench` terms in [CONTEXT.md](../CONTEXT.md). **No
+`Agent host` / `Workstation (the bench)` / `Open bench` terms in [GLOSSARY.md](../GLOSSARY.md). **No
 code has been written yet.** This file is the build list, plus the facts already verified so the next
 session doesn't re-derive them. Delete it once the work lands.
 

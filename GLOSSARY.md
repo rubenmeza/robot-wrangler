@@ -57,6 +57,10 @@ fixes the transport — Herdr pairs with plain SSH (full-fidelity TUI), tmux pai
 An agent-aware Multiplexer (FOSS binary on the box) that can play the Multiplexer role instead
 of tmux, adding semantic agent state (blocked / working / done / idle) that plain tmux lacks.
 
+### Robot update
+Maintenance of the Robot server's installed operating-system packages within its current Ubuntu
+release, together with Herdr. Moving to a newer Ubuntu release is a separate operation.
+
 ### Tailnet
 The owner's private Tailscale network. Every Agent host and every control-surface device is a
 member. The only path to either host.

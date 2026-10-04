@@ -6,7 +6,7 @@ to tear it down.
 
 Based on [@robj3d3's setup](https://x.com/robj3d3/status/2080018987849773315), reworked to be
 automated and *born-locked* (see [ADR 0001](docs/adr/0001-no-public-ingress.md)). Glossary in
-[CONTEXT.md](CONTEXT.md).
+[GLOSSARY.md](GLOSSARY.md).
 
 ## What you get
 

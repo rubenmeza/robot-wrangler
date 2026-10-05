@@ -1,5 +1,9 @@
 # Handoff — implementing the open bench
 
+> **Frozen, 2026-10-05.** Superseded in scope by ADRs 0010–0012: this build list becomes the
+> Open-by-hand part of Personal-host Enrollment. Don't build it as written; rewrite it as the
+> enrollment build list.
+
 Design is settled and recorded: see [ADR 0009](adr/0009-workstation-second-agent-host.md) and the
 `Agent host` / `Workstation (the bench)` / `Open bench` terms in [GLOSSARY.md](../GLOSSARY.md). **No
 code has been written yet.** This file is the build list, plus the facts already verified so the next

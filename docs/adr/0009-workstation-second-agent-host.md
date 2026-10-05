@@ -1,5 +1,9 @@
 # The Workstation as a second agent host, opened by hand
 
+> **Amended by [ADR 0010](0010-personal-hosts-reachability-modes.md) and [ADR 0011](0011-t3-code-beside-ssh.md):**
+> "the bench" is now one Personal host in Open-by-hand mode; personal machines may also be
+> Always-on, bounded by tailnet policy instead of time. Closing also turns off T3's Tailscale Serve.
+
 The laptop (`omarchy`) becomes a second **Agent host** — a peer to the box, not a replacement —
 reachable from the Pixel and iPad over the same tailnet. It is shut by default and opened
 deliberately with `make bench-open` for as long as the owner is away from the desk, then hard-closed

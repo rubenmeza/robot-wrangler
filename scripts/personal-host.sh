@@ -84,10 +84,26 @@ _write_system_file() {
 }
 
 _validate_sshd() {
-  local effective line address listen_count=0
+  local effective trace diagnostics line address listen_count=0 parse_failed=0
   sudo sshd -t || return 1
+  # Let OpenSSH resolve every active Include. A global -T check cannot prove
+  # restrictions inside Match blocks, and -o options do not override them.
+  # Reject conditional configuration conservatively, without sampling clients.
+  diagnostics=$(mktemp)
+  if ! effective=$(sudo sshd -T -ddd 2> "$diagnostics"); then parse_failed=1; fi
+  trace=$(cat "$diagnostics")
+  rm -f "$diagnostics"
+  if ! grep -Fiq 'parse_server_config_depth: config' <<< "$trace"; then
+    printf 'Cannot inspect SSH conditional configuration; OpenSSH parser diagnostics are unavailable.\n' >&2
+    return 1
+  fi
+  if grep -Eiq "checking syntax for ['\"]?Match[[:space:]]|checking match for " <<< "$trace"; then
+    printf 'SSH Match blocks are incompatible with enrollment, including those in active Include files. Remove them before retrying.\n' >&2
+    return 1
+  fi
+  [ "$parse_failed" = 0 ] || return 1
   # OpenSSH releases emit either lowercase or capitalized directive names.
-  effective=$(sudo sshd -T | awk '{$1=tolower($1); print}') || return 1
+  effective=$(awk '{$1=tolower($1); print}' <<< "$effective")
   for line in 'allowusers '"$owner" 'permitrootlogin no' 'passwordauthentication no' \
     'kbdinteractiveauthentication no' 'pubkeyauthentication yes' 'authenticationmethods publickey' \
     'authorizedkeysfile .ssh/authorized_keys' 'authorizedkeyscommand none' \
@@ -136,6 +152,26 @@ _enroll_ssh() {
     _fail 'SSH validation failed; restored the previous enrollment drop-in. SSH was not enabled.'
   fi
   rm -f "$backup"
+  # Bound addresses can arrive after tailscaled starts. Retry without exhausting
+  # systemd's rate limit, including after a slow Tailnet reconnect at boot.
+  local unit_dropin="$host_root/etc/systemd/system/sshd.service.d/10-robot-wrangler.conf"
+  local unit_candidate
+  unit_candidate=$(mktemp)
+  cat > "$unit_candidate" <<'UNIT'
+[Unit]
+Wants=tailscaled.service
+After=tailscaled.service
+StartLimitIntervalSec=0
+
+[Service]
+Restart=always
+RestartSec=5s
+UNIT
+  if ! sudo cmp -s "$unit_candidate" "$unit_dropin"; then
+    _write_system_file "$unit_dropin" 644 < "$unit_candidate"
+    sudo systemctl daemon-reload
+  fi
+  rm -f "$unit_candidate"
   sudo ufw allow in on tailscale0 to any port 22 proto tcp
   sudo ufw allow in on tailscale0 to any port 60000:61000 proto udp
   # Arch normally has no socket unit. Still mask it against future activation.
@@ -186,14 +222,9 @@ SH
   fi
 }
 
-# Later tickets supply these services without changing enrollment orchestration.
-_enroll_t3() { :; }
-_enroll_moshi() { :; }
 for personal_helper in scripts/_personal-t3.sh scripts/_personal-moshi.sh scripts/_personal-revoke.sh; do
-  if [ -f "$personal_helper" ]; then
-    # shellcheck source=/dev/null
-    source "$personal_helper"
-  fi
+  # shellcheck source=/dev/null
+  source "$personal_helper"
 done
 
 _enroll_power() {

@@ -99,14 +99,18 @@ these choices for later runs. Enter your `sudo` password when prompted. Enrollme
 SSH/tmux/mosh, registers your Device key, sets you as Tailscale operator, and configures:
 
 - SSH bound to Tailnet addresses only, your Unix user only, public-key authentication only;
-  no root or password login. SSH starts at boot; socket activation is masked.
+  no root or password login. SSH starts after `tailscaled` at boot and retries every five seconds
+  until its Tailnet addresses are available; socket activation is masked.
 - T3 Code as `t3code.service`, using an existing installation or the standalone installer, with
   user lingering and resuming interrupted turns enabled. T3 publishes itself on Tailnet HTTPS.
 - `moshi-hook` as a persistent user service, and interactive SSH login attachment to the most
   recently attached tmux session (or a new `work` session). File transfers and remote commands
   do not attach.
 - Permanent firewall rules on `tailscale0` for SSH and mosh, with effective SSH configuration
-  checked before activation. Suspend and hibernation are disabled for this Always-on host.
+  checked before activation. Enrollment rejects all active SSH `Match` blocks, including those
+  in `Include` files: global settings alone cannot guarantee the same restrictions for every
+  connection. OpenSSH parser diagnostics must be available or validation fails closed. Suspend
+  and hibernation are disabled for this Always-on host.
 
 Enrollment does **not** load `.env` or require a DigitalOcean token, robot auth key, Claude token
 or GitHub token. Personal hosts use your existing local agent credentials. If Moshi is unpaired,
@@ -331,7 +335,9 @@ enrollment, pairing, reboot, rebuild or revoke is implied by automated tests.
 - **Enrollment rejects prerequisites:** start `tailscaled`, run `sudo tailscale up`, and enable
   MagicDNS/HTTPS in the Tailnet DNS settings. Run as your own user on Arch/Omarchy with Bash/Zsh.
 - **SSH validation fails:** enrollment restores its prior drop-in and does not enable SSH.
-  Remove conflicting SSH settings, especially non-Tailnet `ListenAddress` entries, then retry.
+  Remove conflicting SSH settings, especially non-Tailnet `ListenAddress` entries and active
+  `Match` blocks in `/etc/ssh/sshd_config` or its included files, then retry. Conditional SSH
+  customizations must be removed before enrollment; commented examples are fine.
 - **Moshi token rejected:** get a current token in **Settings → Hooks**, enter it at the hidden
   enrollment prompt and retry. Do not print its private state to debug.
 - **T3 is unreachable:** check `make status`, the host's mode, Tailnet policy and Tailscale

@@ -79,6 +79,13 @@ class PersonalHostTests(unittest.TestCase):
         calls = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
         return [call for call in calls if not name or call[0] == name]
 
+    def test_incomplete_checkout_refuses_enrollment_before_changing_host(self):
+        (self.root / "scripts/_personal-t3.sh").unlink()
+        result = self.local()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.calls("sudo"), [])
+        self.assertFalse((self.home / ".config/robot-wrangler/personal-host.json").exists())
+
     def test_enrollment_installs_missing_moshi_without_automatic_onboarding(self):
         (self.bin / "moshi-hook").unlink()
         self.stub("curl", '''[[ "$*" == "-fsSL https://getmoshi.app/install.sh" ]]
@@ -241,11 +248,24 @@ INSTALLER
                      "AuthenticationMethods publickey"):
             self.assertIn(line, config)
         self.assertIn(["sshd", "-t"], self.calls("sshd"))
-        self.assertIn(["sshd", "-T"], self.calls("sshd"))
+        self.assertIn(["sshd", "-T", "-ddd"], self.calls("sshd"))
         self.assertIn(["systemctl", "enable", "sshd.service"], self.calls("systemctl"))
         self.assertIn(["systemctl", "start", "sshd.service"], self.calls("systemctl"))
         self.assertIn(["ufw", "allow", "in", "on", "tailscale0", "to", "any", "port", "22", "proto", "tcp"], self.calls("ufw"))
         self.assertIn(["ufw", "allow", "in", "on", "tailscale0", "to", "any", "port", "60000:61000", "proto", "udp"], self.calls("ufw"))
+
+    def test_enrollment_keeps_retrying_ssh_until_tailnet_addresses_arrive_after_boot(self):
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        unit = self.host / "etc/systemd/system/sshd.service.d/10-robot-wrangler.conf"
+        self.assertTrue(unit.exists(), "SSH needs persistent Tailnet ordering and bind retry policy")
+        policy = unit.read_text()
+        for setting in ("Wants=tailscaled.service", "After=tailscaled.service",
+                        "StartLimitIntervalSec=0", "Restart=always", "RestartSec=5s"):
+            self.assertIn(setting, policy)
+        calls = self.calls("systemctl")
+        self.assertLess(calls.index(["systemctl", "daemon-reload"]),
+                        calls.index(["systemctl", "start", "sshd.service"]))
 
     def test_enrollment_disables_socket_activation_and_suspend_for_always_on_host(self):
         result = self.local()
@@ -304,6 +324,34 @@ INSTALLER
         self.assertNotIn(["systemctl", "reload", "sshd.service"], calls)
         self.assertNotIn(["systemctl", "restart", "sshd.service"], calls)
         self.assertNotIn(["systemctl", "start", "sshd.service"], calls)
+
+    def test_enrollment_rejects_conditional_ssh_bypasses_even_in_nested_includes(self):
+        if not Path("/usr/bin/sshd").exists():
+            self.skipTest("real OpenSSH server is unavailable")
+        config_dir = self.host / "etc/ssh"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        managed = config_dir / "sshd_config.d/00-robot-wrangler.conf"
+        managed.parent.mkdir()
+        config = config_dir / "sshd_config"
+        outer = config_dir / "existing.conf"
+        nested = config_dir / "nested.conf"
+        self.stub("sshd", f'exec /usr/bin/sshd -f "{config}" "$@"\n')
+        for match in ("User owner", "User root", "Address 100.100.100.100", "LocalPort 22"):
+            with self.subTest(match=match):
+                previous = "# previous enrollment configuration\n"
+                managed.write_text(previous)
+                config.write_text(f"HostKey {config_dir}/ssh_host_ed25519_key\n"
+                                  f"Include {managed}\nInclude {outer}\n")
+                outer.write_text(f"Include {nested}\n")
+                nested.write_text(f"Match {match}\nPasswordAuthentication yes\n"
+                                  "AuthenticationMethods password\nAllowUsers other\n"
+                                  "PermitRootLogin yes\nAuthorizedKeysFile .ssh/other\n")
+                result = self.local()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("Match", result.stderr)
+                self.assertEqual(managed.read_text(), previous)
+                self.assertNotIn(["systemctl", "enable", "sshd.service"], self.calls("systemctl"))
+                self.assertFalse((self.home / ".config/robot-wrangler/personal-host.json").exists())
 
     def test_enrollment_rolls_back_ssh_when_existing_configuration_adds_public_listener(self):
         dropin = self.host / "etc/ssh/sshd_config.d/00-robot-wrangler.conf"
@@ -683,6 +731,8 @@ elif name == "sshd":
         print("invalid sshd config", file=sys.stderr)
         sys.exit(1)
     if "-T" in args:
+        if "-ddd" in args:
+            print("debug2: parse_server_config_depth: config /etc/ssh/sshd_config len 1", file=sys.stderr)
         print("listenaddress 100.64.0.2:22\nlistenaddress [fd7a:115c:a1e0::2]:22")
         if (root / "wide-sshd").exists():
             print("listenaddress 0.0.0.0:22")

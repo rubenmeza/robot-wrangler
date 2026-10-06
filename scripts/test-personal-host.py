@@ -48,7 +48,7 @@ class PersonalHostTests(unittest.TestCase):
         dispatcher.write_text(FAKE_COMMAND)
         dispatcher.chmod(0o755)
         for name in ("sudo", "tailscale", "systemctl", "loginctl", "ufw", "sshd",
-                     "tmux", "pacman", "id", "pgrep", "pkill", "ss", "t3", "curl"):
+                     "tmux", "pacman", "id", "pgrep", "pkill", "ss", "t3", "curl", "moshi-hook"):
             (self.bin / name).symlink_to(dispatcher)
         self.public_keys = {}
         for name in ("robot_ed25519", "pixel", "ipad"):
@@ -78,6 +78,109 @@ class PersonalHostTests(unittest.TestCase):
         path = self.root / "calls.jsonl"
         calls = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
         return [call for call in calls if not name or call[0] == name]
+
+    def test_enrollment_installs_missing_moshi_without_automatic_onboarding(self):
+        (self.bin / "moshi-hook").unlink()
+        self.stub("curl", '''[[ "$*" == "-fsSL https://getmoshi.app/install.sh" ]]
+cat <<'INSTALLER'
+#!/bin/sh
+[ "$MOSHI_HOOK_SKIP_FIRST_RUN" = 1 ]
+[ "$MOSHI_HOOK_SKIP_SERVICE" = 1 ]
+mkdir -p "$HOME/.local/bin"
+cp "$TEST_ROOT/bin/fake-command" "$HOME/.local/bin/moshi-hook"
+chmod +x "$HOME/.local/bin/moshi-hook"
+printf installed > "$TEST_ROOT/moshi-installed"
+INSTALLER
+''')
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / "moshi-installed").exists())
+        self.assertIn(["moshi-hook", "status", "--json"], self.calls("moshi-hook"))
+        self.assertIn(["moshi-hook", "service", "install"], self.calls("moshi-hook"))
+        self.assertIn(["loginctl", "enable-linger", "owner"], self.calls("loginctl"))
+
+    def test_enrollment_keeps_existing_paired_moshi_and_user_hooks_untouched(self):
+        (self.root / "moshi-status.json").write_text(json.dumps({
+            "paired": True, "hostSecret": "synthetic-never-print-secret",
+            "hooks": [{"target": "claude", "status": "installed"}]}))
+        (self.root / "systemctl.json").write_text(json.dumps({
+            "moshi-hook.service": {"enabled": True, "active": True}}))
+        settings = self.home / ".claude/settings.json"
+        settings.parent.mkdir()
+        settings.write_text('{"hooks":{"Stop":[{"hooks":[{"command":"my-hook"}]}]}}')
+        before = (settings.read_bytes(), settings.stat().st_mtime_ns)
+        for answer in ("desk\nalways-on\n", "\n\n"):
+            result = self.local(answer)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertNotIn("synthetic-never-print-secret", result.stdout + result.stderr)
+        self.assertEqual(before, (settings.read_bytes(), settings.stat().st_mtime_ns))
+        self.assertEqual(self.calls("moshi-hook"), [["moshi-hook", "status", "--json"]] * 2)
+        self.assertNotIn(["systemctl", "--user", "restart", "moshi-hook.service"],
+                         self.calls("systemctl"))
+
+    def test_unpaired_moshi_without_token_stops_with_keyboard_instructions(self):
+        (self.root / "moshi-status.json").write_text(json.dumps({"paired": False, "hooks": []}))
+        result = self.local()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Moshi", result.stderr)
+        self.assertIn("MOSHI_PAIRING_TOKEN", result.stderr)
+        self.assertNotIn(["moshi-hook", "service", "install"], self.calls("moshi-hook"))
+        self.assertFalse((self.home / ".config/robot-wrangler/personal-host.json").exists())
+
+    def test_enrollment_pairs_moshi_once_without_recording_or_printing_token(self):
+        (self.root / "moshi-status.json").write_text(json.dumps({"paired": False, "hooks": []}))
+        for supplied_by in ("environment", "keyboard"):
+            with self.subTest(supplied_by=supplied_by):
+                (self.root / "moshi-status.json").write_text(json.dumps({"paired": False, "hooks": []}))
+                if supplied_by == "environment":
+                    self.env["MOSHI_PAIRING_TOKEN"] = "synthetic-moshi-token"
+                    answer = "desk\nalways-on\n"
+                else:
+                    self.env.pop("MOSHI_PAIRING_TOKEN", None)
+                    answer = "desk\nalways-on\nsynthetic-moshi-token\n"
+                count = len(self.calls("moshi-hook"))
+                result = self.local(answer)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(["moshi-hook", "pair", "--name", "desk"], self.calls("moshi-hook")[count:])
+                self.assertNotIn("synthetic-moshi-token", result.stdout + result.stderr)
+                result = self.local("\n\n")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(self.calls("moshi-hook")[count:].count(
+                    ["moshi-hook", "pair", "--name", "desk"]), 1)
+                for path in (self.root / "calls.jsonl", self.root / "moshi-status.json",
+                             self.home / ".config/robot-wrangler/personal-host.json"):
+                    self.assertNotIn("synthetic-moshi-token", path.read_text())
+
+    def test_enrollment_repairs_missing_moshi_hooks_and_stopped_service(self):
+        (self.root / "moshi-status.json").write_text(json.dumps({
+            "paired": True, "hooks": [{"target": "claude", "status": "stale"},
+                                      {"target": "codex", "status": "not_found"}]}))
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(["moshi-hook", "install"], self.calls("moshi-hook"))
+        self.assertIn(["moshi-hook", "service", "install"], self.calls("moshi-hook"))
+        count = len(self.calls("moshi-hook"))
+        result = self.local("\n\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls("moshi-hook")[count:], [["moshi-hook", "status", "--json"]])
+
+    def test_moshi_enrollment_requires_the_owners_systemd_user_manager(self):
+        (self.root / "missing-user-manager").touch()
+        result = self.local()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("user manager", result.stderr)
+        self.assertEqual(self.calls("moshi-hook"), [])
+
+    def test_invalid_moshi_pairing_metadata_never_re_pairs_or_prints_document(self):
+        for metadata in ('invalid synthetic-secret-json', '{"paired":"unknown","secret":"synthetic-secret-json"}',
+                         '{"paired":true,"secret":"synthetic-secret-json"}'):
+            with self.subTest(metadata=metadata):
+                (self.root / "moshi-status.json").write_text(metadata)
+                result = self.local()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Moshi pairing metadata", result.stderr)
+                self.assertNotIn("synthetic-secret-json", result.stdout + result.stderr)
+                self.assertFalse(any(call[1:2] == ["pair"] for call in self.calls("moshi-hook")))
 
     def test_enrollment_refuses_unsupported_os_before_changing_host(self):
         (self.host / "etc/os-release").write_text("ID=ubuntu\n")
@@ -409,6 +512,8 @@ elif name == "systemctl":
     if "--user" in args:
         with (root / "user-runtime-dirs.jsonl").open("a") as stream:
             stream.write(json.dumps(os.environ.get("XDG_RUNTIME_DIR")) + "\n")
+    if args == ["--user", "show-environment"]:
+        sys.exit(1 if (root / "missing-user-manager").exists() else 0)
     state_path = root / "systemctl.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
     args = [arg for arg in args if arg not in ("--user", "--quiet")]
@@ -432,6 +537,31 @@ elif name == "systemctl":
         if action == "mask": entry["masked"] = True
         if action == "unmask": entry["masked"] = False
     state_path.write_text(json.dumps(state))
+elif name == "moshi-hook":
+    if args == ["status", "--json"]:
+        status_path = root / "moshi-status.json"
+        print(status_path.read_text() if status_path.exists() else json.dumps({
+            "paired": True, "hooks": [{"target": "claude", "status": "installed"}]}))
+    elif args[:1] == ["pair"]:
+        if os.environ.get("MOSHI_PAIRING_TOKEN") != "synthetic-moshi-token":
+            sys.exit(1)
+        path = root / "moshi-status.json"
+        state = json.loads(path.read_text())
+        state["paired"] = True
+        path.write_text(json.dumps(state))
+        print("synthetic-moshi-token")
+        print("synthetic-moshi-token", file=sys.stderr)
+    elif args == ["install"]:
+        path = root / "moshi-status.json"
+        state = json.loads(path.read_text())
+        for hook in state["hooks"]:
+            if hook["status"] == "stale": hook["status"] = "installed"
+        path.write_text(json.dumps(state))
+    elif args == ["service", "install"]:
+        path = root / "systemctl.json"
+        state = json.loads(path.read_text()) if path.exists() else {}
+        state["moshi-hook.service"] = {"enabled": True, "active": True}
+        path.write_text(json.dumps(state))
 elif name == "tmux":
     if args[:1] == ["list-sessions"]:
         print("100 $1\n200 $2")

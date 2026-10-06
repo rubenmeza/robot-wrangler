@@ -19,6 +19,8 @@ packages:
   # Codex CLI sandboxes tool calls with bubblewrap; without it Codex falls back to a bundled copy
   # and warns on every run (ADR 0008).
   - bubblewrap
+  # T3 standalone runtime links libatomic.so.1 on Ubuntu (ADR 0011).
+  - libatomic1
 
 # Don't force a password change on first login. Without this, cloud-init's default password
 # expiry marks the locked robot account "expired", which breaks the robot user's NOPASSWD sudo.
@@ -80,6 +82,12 @@ write_files:
     permissions: '0755'
     encoding: b64
     content: ${provision_sh_b64}
+
+  # Shared per-user T3 setup: installer, resume setting and private user service files.
+  - path: /opt/robot/setup-t3.sh
+    permissions: '0755'
+    encoding: b64
+    content: ${setup_t3_sh_b64}
 
   # Non-secret config the Provisioner sources.
   - path: /opt/robot/provision.env

@@ -100,11 +100,27 @@ install_agent() {
 }
 
 # Let the robot user's systemd --user services run without an active login. moshi-hook installs
-# itself as a --user service (ADR 0007); linger is what keeps it running after the provisioning SSH
-# session ends and across reboots. Harmless when Moshi is unused (no user service is installed).
+# itself as a --user service (ADR 0007), alongside T3 (ADR 0011). Linger keeps both running after
+# the provisioning SSH session ends and across reboots.
 enable_linger() {
   if skip_host; then echo "skip: loginctl enable-linger (SKIP_HOST)"; return; fi
   loginctl enable-linger "$ROBOT_USER"
+  # Ensure the user manager is available before registering its services on first boot.
+  systemctl start "user@$(id -u "$ROBOT_USER").service"
+}
+
+# T3 is installed as the robot user, with no Node runtime. Host-only activation is skipped in
+# the container smoke, while settings and the unit are still rendered for verification.
+install_t3() {
+  local activate=1
+  if skip_host; then
+    activate=0
+    echo "skip: tailscale operator + T3 service activation (SKIP_HOST)"
+  else
+    tailscale set --operator="$ROBOT_USER"
+  fi
+  sudo -u "$ROBOT_USER" -H env XDG_RUNTIME_DIR="/run/user/$(id -u "$ROBOT_USER")" \
+    bash "$(dirname "$0")/setup-t3.sh" true "$activate" true
 }
 
 # Readiness marker the laptop polls (wait-ready.sh) before pushing the agent token over SSH.
@@ -121,6 +137,7 @@ main() {
   fix_password_aging
   install_agent
   enable_linger
+  install_t3
   mark_provisioned
   echo "provisioned"
 }

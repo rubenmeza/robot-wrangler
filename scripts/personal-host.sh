@@ -185,7 +185,7 @@ SH
 # Later tickets supply these services without changing enrollment orchestration.
 _enroll_t3() { :; }
 _enroll_moshi() { :; }
-for personal_helper in scripts/_personal-t3.sh scripts/_personal-moshi.sh; do
+for personal_helper in scripts/_personal-t3.sh scripts/_personal-moshi.sh scripts/_personal-revoke.sh; do
   if [ -f "$personal_helper" ]; then
     # shellcheck source=/dev/null
     source "$personal_helper"
@@ -217,6 +217,7 @@ _enroll() {
   sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
   _enroll_t3
   _enroll_moshi
+  _enroll_inventory
   jq -n --arg name "$host_name" --arg mode "$reachability" '{name:$name,mode:$mode}' |
     _write_user_file "$state_file" 600
   printf 'Enrolled %s (%s).\n' "$host_name" "$reachability"
@@ -224,5 +225,6 @@ _enroll() {
 
 case "${1:-}" in
   enroll) _enroll ;;
-  *) _fail 'Usage: personal-host.sh enroll' ;;
+  revoke) _revoke "${2:-}" ;;
+  *) _fail 'Usage: personal-host.sh enroll | revoke <device-name>' ;;
 esac

@@ -28,3 +28,7 @@ key above. Transport follows the box's multiplexer profile (ADR 0003): **herdr â
 After adding a device key to an already-running box, re-seed with:
 `make robot-destroy && make robot-wrangler` (cattle, not pet), or append it manually to
 `~/.ssh/authorized_keys` on the box over the tailnet.
+
+For revocation, rename each Tailnet node to match its `devices/<name>.pub` filename and use
+the same T3 Pairing label. Run `make revoke DEVICE=<name>` from another Personal host; see
+[device revocation](../docs/device-revocation.md) for retries and key propagation.

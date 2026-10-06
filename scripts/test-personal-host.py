@@ -569,5 +569,225 @@ elif name == "pgrep":
     sys.exit(1)
 '''
 
+class RevokeTests(unittest.TestCase):
+    write_tailscale = PersonalHostTests.write_tailscale
+    local = PersonalHostTests.local
+    calls = PersonalHostTests.calls
+    stub = PersonalHostTests.stub
+
+    def setUp(self):
+        PersonalHostTests.setUp(self)
+        (self.root / '.env').write_text('TAILSCALE_API_KEY=test-api-credential\nTAILSCALE_TAILNET=example.ts.net\n')
+        (self.root / 'devices/laptop.pub').write_text(self.public_keys['ipad'])
+        (self.root / 'hosts').mkdir()
+        for name, user in [('desk', 'owner'), ('laptop', 'alice')]:
+            (self.root / 'hosts' / f'{name}.json').write_text(json.dumps({'name': name, 'user': user}))
+        self.nodes = {'devices': [
+            {'id': '1', 'name': 'pixel.example.ts.net', 'os': 'android'},
+            {'id': '2', 'name': 'desk.example.ts.net', 'os': 'linux'},
+            {'id': '3', 'name': 'laptop.example.ts.net', 'os': 'linux'},
+            {'id': '4', 'name': 'robot.example.ts.net', 'os': 'linux', 'tags': ['tag:server']},
+        ]}
+        (self.root / 'api-nodes.json').write_text(json.dumps(self.nodes))
+        for name in ('curl', 'ssh', 't3'):
+            path = self.bin / name
+            path.unlink(missing_ok=True)
+            path.write_text(REVOKE_FAKE)
+            path.chmod(0o755)
+
+    def revoke(self, name='pixel'):
+        return self.local('', 'revoke', name)
+
+    def test_revoke_removes_node_key_and_both_pairing_kinds_on_every_host(self):
+        result = self.revoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.root / 'devices/pixel.pub').exists())
+        self.assertEqual(len(self.calls('curl')), 2)
+        self.assertIn(['t3', 'auth', 'pairing', 'revoke', 'pending-pixel'], self.calls('t3'))
+        self.assertIn(['t3', 'auth', 'session', 'revoke', 'session-pixel'], self.calls('t3'))
+        ssh = self.calls('ssh')
+        self.assertEqual({next(a for a in call if '@' in a) for call in ssh}, {'alice@laptop', 'robot@robot'})
+        for call in ssh:
+            self.assertIn('BatchMode=yes', call)
+            self.assertIn('ConnectTimeout=5', call)
+        self.assertNotIn('other-device', str(self.calls('t3')))
+        self.assertIn('Commit', result.stdout)
+        self.assertIn('enrollment', result.stdout)
+        self.assertIn('rebuild', result.stdout)
+        self.assertNotIn('test-api-credential', result.stdout + result.stderr + str(self.calls()))
+
+
+    def test_unreachable_host_is_reported_and_can_be_retried_after_key_and_node_removal(self):
+        (self.root / 'unreachable-laptop').touch()
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Unreachable Agent host: laptop', result.stderr)
+        self.assertIn('Revoked T3 Pairings and sessions on robot', result.stdout)
+        self.assertFalse((self.root / 'devices/pixel.pub').exists())
+        receipt = self.home / '.local/state/robot-wrangler/revocations/pixel.json'
+        self.assertEqual(receipt.stat().st_mode & 0o777, 0o600)
+        # Even if the shared inventory later disappears, retry remembers the target.
+        (self.root / 'hosts/laptop.json').unlink()
+        (self.root / 'unreachable-laptop').unlink()
+        count = len(self.calls('ssh'))
+        result = self.revoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('already absent', result.stdout)
+        self.assertTrue(any('alice@laptop' in call for call in self.calls('ssh')[count:]))
+
+    def test_missing_host_inventory_stays_incomplete_even_if_node_later_disappears(self):
+        (self.root / 'hosts/laptop.json').unlink()
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing enrollment inventory for laptop', result.stderr)
+        nodes = json.loads((self.root / 'api-nodes.json').read_text())
+        nodes['devices'] = [node for node in nodes['devices'] if node['id'] != '3']
+        (self.root / 'api-nodes.json').write_text(json.dumps(nodes))
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Missing enrollment inventory for laptop', result.stderr)
+
+    def test_unknown_and_unsafe_names_refuse_all_mutations(self):
+        for name in ('missing', '../pixel', 'pixel;touch sentinel', '$(touch sentinel)'):
+            with self.subTest(name=name):
+                before = list(self.calls())
+                result = self.revoke(name)
+                self.assertNotEqual(result.returncode, 0)
+                after = self.calls()[len(before):]
+                self.assertEqual([c for c in after if c[0] in ('curl', 'ssh', 't3')], [])
+                self.assertTrue((self.root / 'devices/pixel.pub').exists())
+                self.assertFalse((self.root / 'sentinel').exists())
+
+    def test_refuses_current_tailnet_host_and_enrolled_host_name(self):
+        for name in ('desk', 'old-name'):
+            if name == 'old-name':
+                config = self.home / '.config/robot-wrangler/personal-host.json'
+                config.parent.mkdir(parents=True)
+                config.write_text(json.dumps({'name': name, 'mode': 'always-on'}))
+            (self.root / 'devices' / f'{name}.pub').write_text(self.public_keys['pixel'])
+            result = self.revoke(name)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Refusing to revoke', result.stderr)
+            self.assertTrue((self.root / 'devices' / f'{name}.pub').exists())
+        self.assertEqual(self.calls('curl'), [])
+        self.assertEqual(self.calls('ssh'), [])
+
+    def test_api_listing_failure_preserves_device_key_and_does_not_revoke_pairings(self):
+        (self.root / 'api-error').touch()
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('API listing failed', result.stderr)
+        self.assertTrue((self.root / 'devices/pixel.pub').exists())
+        self.assertEqual(self.calls('ssh'), [])
+        self.assertEqual(self.calls('t3'), [])
+
+    def test_api_delete_failure_is_incomplete_but_other_revocations_continue(self):
+        (self.root / 'delete-error').touch()
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('API delete failed', result.stderr)
+        self.assertIn('Revoked T3 Pairings and sessions on robot', result.stdout)
+        self.assertFalse((self.root / 'devices/pixel.pub').exists())
+        (self.root / 'delete-error').unlink()
+        result = self.revoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Deleted Tailnet node pixel', result.stdout)
+
+    def test_session_revocation_failure_reports_every_failed_host(self):
+        (self.root / 'session-error').touch()
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        for name in ('desk', 'laptop', 'robot'):
+            self.assertIn(f'T3 revocation failed on {name}', result.stderr)
+        self.assertNotIn('Revoked T3 Pairings and sessions', result.stdout)
+        self.assertEqual(len([c for c in self.calls('t3') if c[1:4] == ['auth', 'pairing', 'revoke']]), 3)
+
+    def test_ambiguous_exact_node_name_refuses_before_any_mutation(self):
+        self.nodes['devices'].append({'id': 'other', 'name': 'pixel.other.ts.net', 'os': 'android'})
+        (self.root / 'api-nodes.json').write_text(json.dumps(self.nodes))
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Ambiguous', result.stderr)
+        self.assertEqual(len(self.calls('curl')), 1)
+        self.assertTrue((self.root / 'devices/pixel.pub').exists())
+        self.assertEqual(self.calls('ssh'), [])
+
+    def test_pairing_list_failure_is_not_an_empty_successful_revocation(self):
+        (self.root / 'pairing-list-error').touch()
+        result = self.revoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Could not list T3 pairing metadata', result.stderr)
+        self.assertEqual(len([c for c in self.calls('t3') if c[1:4] == ['auth', 'session', 'revoke']]), 3)
+
+    def test_unrelated_tailnet_name_is_never_deleted_by_prefix(self):
+        self.nodes['devices'][0]['name'] = 'pixel-phone.example.ts.net'
+        (self.root / 'api-nodes.json').write_text(json.dumps(self.nodes))
+        result = self.revoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('already absent', result.stdout)
+        self.assertEqual(len(self.calls('curl')), 1)
+
+    def test_enrollment_records_real_unix_user_in_public_inventory(self):
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads((self.root / 'hosts/desk.json').read_text()), {'name': 'desk', 'user': 'owner'})
+        self.assertIn('Commit hosts/desk.json', result.stdout)
+        self.assertNotIn('test-api-credential', (self.root / 'hosts/desk.json').read_text())
+
+    def test_make_revoke_passes_device_as_one_argument_without_shell_evaluation(self):
+        shutil.copyfile(ROOT / 'Makefile', self.root / 'Makefile')
+        result = subprocess.run(['make', 'revoke', 'DEVICE=pixel'], cwd=self.root, env=self.env,
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = subprocess.run(['make', 'revoke', 'DEVICE=pixel";touch sentinel;#'],
+                                cwd=self.root, env=self.env, text=True, capture_output=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / 'sentinel').exists())
+
+    def test_unregistered_linux_clients_are_not_assumed_to_be_agent_hosts(self):
+        self.nodes['devices'].append({'id': 'visitor', 'name': 'visitor.example.ts.net', 'os': 'linux', 'user': 'another-owner'})
+        (self.root / 'api-nodes.json').write_text(json.dumps(self.nodes))
+        result = self.revoke()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('visitor', result.stdout + result.stderr)
+
+REVOKE_FAKE = r'''#!/usr/bin/env python3
+import json, os, pathlib, subprocess, sys
+root = pathlib.Path(os.environ['TEST_ROOT'])
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+with (root / 'calls.jsonl').open('a') as out:
+    out.write(json.dumps([name, *args]) + '\n')
+if name == 'curl':
+    config = sys.stdin.read()
+    assert 'test-api-credential' in config
+    if (root / 'api-error').exists(): sys.exit(22)
+    path = root / 'api-nodes.json'
+    nodes = json.loads(path.read_text())
+    if 'DELETE' in args:
+        if (root / 'delete-error').exists(): sys.exit(22)
+        assert args[-1].endswith('/device/1')
+        nodes['devices'] = [node for node in nodes['devices'] if node['id'] != '1']
+        path.write_text(json.dumps(nodes))
+    else:
+        assert args[-1] == 'https://api.tailscale.com/api/v2/tailnet/example.ts.net/devices'
+        print(json.dumps(nodes))
+elif name == 'ssh':
+    destination = next(arg for arg in args if '@' in arg)
+    if destination == 'alice@laptop' and (root / 'unreachable-laptop').exists(): sys.exit(255)
+    sys.exit(subprocess.run(['bash', '-s', '--', 'pixel'], input=sys.stdin.read(), text=True).returncode)
+elif name == 't3':
+    if args == ['auth', 'pairing', 'list', '--json']:
+        if (root / 'pairing-list-error').exists(): sys.exit(1)
+        print(json.dumps([{'id': 'pending-pixel', 'label': 'pixel'}, {'id': 'other-device', 'label': 'ipad'}]))
+    elif args == ['auth', 'session', 'list', '--json']:
+        print(json.dumps([{'sessionId': 'session-pixel', 'client': {'label': 'pixel'}}, {'sessionId': 'other-device', 'client': {'label': 'ipad'}}]))
+    elif args in (['auth', 'pairing', 'revoke', 'pending-pixel'], ['auth', 'session', 'revoke', 'session-pixel']):
+        if args[1:3] == ['session', 'revoke'] and (root / 'session-error').exists(): sys.exit(1)
+    else:
+        raise AssertionError(args)
+'''
+
+
 if __name__ == "__main__":
     unittest.main()

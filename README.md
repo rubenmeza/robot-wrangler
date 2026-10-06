@@ -141,3 +141,7 @@ Stale node not deleted (step 2), or a spent/wrong key in `.env`. There is **no p
 design, so read the boot log out-of-band: DO droplet `robot` → **Recovery Console** (noVNC) → log
 in as `robot` with your console password (`TF_VAR_robot_console_password_hash`, see
 [ADR 0005](docs/adr/0005-console-break-glass-password.md)) → `sudo tail -80 /var/log/cloud-init-output.log`.
+
+Lost a device? Use `make revoke DEVICE=<name>` from another Personal host. See
+[device revocation](docs/device-revocation.md) for API permissions, host inventory, retries,
+and propagating the removed Device key.

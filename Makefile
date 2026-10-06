@@ -1,4 +1,4 @@
-.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll
+.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll revoke
 .DEFAULT_GOAL := help
 
 help: ## show this help
@@ -63,3 +63,7 @@ tailnet-apply: ## apply the whole Tailnet policy (separate state from the Robot 
 
 enroll: ## enroll this Arch/Omarchy machine as a Personal host
 	@./scripts/personal-host.sh enroll
+
+export DEVICE
+revoke: ## revoke a lost Device key, Tailnet node and T3 Pairings everywhere
+	@./scripts/personal-host.sh revoke "$${DEVICE:-}"

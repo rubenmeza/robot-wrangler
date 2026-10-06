@@ -1,4 +1,4 @@
-.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll revoke
+.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll open close status revoke
 .DEFAULT_GOAL := help
 
 help: ## show this help
@@ -67,3 +67,12 @@ enroll: ## enroll this Arch/Omarchy machine as a Personal host
 export DEVICE
 revoke: ## revoke a lost Device key, Tailnet node and T3 Pairings everywhere
 	@./scripts/personal-host.sh revoke "$${DEVICE:-}"
+
+open: ## open SSH and T3 Tailnet doors on this Open-by-hand Personal host
+	@./scripts/personal-host.sh open
+
+close: ## hard-close inbound doors while keeping agents and outbound sessions running
+	@./scripts/personal-host.sh close
+
+status: ## report this Personal host's actual doors, inbound handlers and live work
+	@./scripts/personal-host.sh status

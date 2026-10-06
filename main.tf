@@ -32,6 +32,7 @@ locals {
 
   # The Provisioner ships VERBATIM (no templatefile) so it is a real, lintable, runnable script.
   provision_sh = file("${path.module}/files/provision.sh")
+  setup_t3_sh  = file("${path.module}/files/setup-t3.sh")
 
   # The manifest is a thin list of WHAT. Every dynamic payload is base64'd (encoding: b64), so no
   # non-ASCII byte can ever void the #cloud-config.
@@ -41,6 +42,7 @@ locals {
     console_pw_hash   = var.robot_console_password_hash
     claude_md_b64     = base64encode(local.claude_md)
     provision_sh_b64  = base64encode(local.provision_sh)
+    setup_t3_sh_b64   = base64encode(local.setup_t3_sh)
     provision_env_b64 = base64encode(local.provision_env)
     profile_d_b64     = base64encode(local.profile_d)
     authkey_b64       = base64encode(var.tailscale_authkey)

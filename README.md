@@ -96,6 +96,19 @@ Then, because the Tailscale auth key is **single-use** and the old node lingers:
 2. **Delete the stale `robot` node** in the Tailscale admin console → Machines. Otherwise the new
    box registers as `robot-1` and `robot-ip`/`robot-attach` can't find it (false timeout).
 
+T3 Pairings belong to the rebuilt host and must be created again after each rebuild. Once
+`make robot-wrangler` finishes, use `make robot-ssh` and run this at the trusted terminal on the
+robot, once for each device (replace `pixel` with its name from `devices/`):
+
+```bash
+t3 pair --tailscale --label pixel
+```
+
+Scan the one-time code from that device's T3 client. Pairing codes and URLs are passwords:
+keep them out of logs, screenshots and the repo. No T3 pairing credential goes through cloud-init.
+The Robot server publishes T3 at its Tailnet HTTPS name; SSH and Herdr remain available.
+After `t3 update`, run `systemctl --user restart t3code.service` to use the new runtime.
+
 Moshi push re-pairs automatically from `MOSHI_PAIRING_TOKEN` in `.env` (no action needed). If the
 new box doesn't report `paired`, mint a fresh token in the app (Settings → Hooks) and re-run
 `make robot-auth` (ADR 0007).

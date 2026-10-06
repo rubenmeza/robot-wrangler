@@ -1,6 +1,6 @@
 # T3 Code beside SSH, published only inside the tailnet
 
-Every Agent host, the robot included, runs a **T3 Code** server (`t3 serve`) as a user service,
+Every Agent host, the robot included, runs a **T3 Code** server as a user service,
 published to the tailnet with **Tailscale Serve** and admitted to by per-device **Pairings**. T3 is
 the main way to start and drive agents from any device: the laptop's desktop app in remote-only
 mode, or the T3 phone and tablet apps. SSH stays as a second door for terminal work and Moshi:
@@ -28,7 +28,7 @@ breaks. Dropping either would trade a working path for a nicer one, or the rever
   revoking is scripted: one command revokes a lost device's Pairings on every reachable host, along
   with its tailnet node and SSH public key.
 - **Who turns Serve on depends on the mode.** On the robot and Always-on hosts, T3 owns it
-  (`--tailscale-serve`). On an Open-by-hand host, T3 runs loopback-only and the repo's `open` and
+  (the user service sets `T3CODE_TAILSCALE_SERVE=true`). On an Open-by-hand host, T3 runs loopback-only and the repo's `open` and
   `close` switch Serve themselves: T3 re-enables Serve every time it starts, so if T3 owned it, any
   restart (update, crash) would silently reopen a closed host. Serve config also survives reboots,
   so an Open-by-hand host must also turn it off at boot.
@@ -40,5 +40,11 @@ breaks. Dropping either would trade a working path for a nicer one, or the rever
 - Serve needs MagicDNS and HTTPS certificates on the tailnet, and the host's user set as the
   Tailscale operator; without the operator setting T3 only logs a warning and stays unreachable.
   The tailnet policy (ADR 0012) must grant the owner's devices `tag:server:443` for the robot.
+- The repo owns `t3code.service` and its stable launcher. Native `t3 service install` starts
+  `serve` immediately and logs pairing passwords before safe overrides can be applied. Our unit
+  runs `t3 start --mode web --no-browser --host 127.0.0.1 --port 3773 --log-level warn`, with
+  `T3CODE_TRACE_MIN_LEVEL=Warn` and automatic project bootstrap disabled. Both startup and trace
+  INFO logs are suppressed. Always-on launchers wait for Tailscale readiness; the robot also
+  waits for post-boot agent credentials, keeping them out of the Provisioner. `t3 update` updates the runtime; restart `t3code.service` afterward.
 - Anyone holding a Pairing has full agent and terminal control on that host. Treat pairing codes like
   passwords: never screenshot or log them.

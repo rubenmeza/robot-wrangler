@@ -63,11 +63,14 @@ Fill only the policy settings:
 Back up the existing **Access Controls** policy before the first apply. Review the replacement:
 
 ```bash
-make tailnet-plan
-make tailnet-apply          # prompts before replacing the entire live policy
+make tailnet-plan           # shows the plan, then runs the policy tests; saves nothing
+make tailnet-apply          # runs the policy tests, then prompts before replacing the entire live policy
 ```
 
-The provider checks Tailscale's built-in policy tests during planning and on apply. The grant
+The provider does not run Tailscale's policy tests during `tofu plan`; a plan that breaks a deny
+test still succeeds. Both targets therefore send the exact planned policy to Tailscale's
+`/acl/validate` endpoint, which runs the tests without saving, and stop with the failing tests
+listed if any fail. The grant
 admits only the owner's user-owned devices to other owner devices and `tag:server` on SSH TCP
 22, mosh UDP 60000–61000 and HTTPS TCP 443. The tagged robot cannot initiate access to any
 Personal host; other traffic is denied by default. This uses OpenSSH, not Tailscale SSH.
@@ -80,10 +83,12 @@ provider from restoring the default allow-all policy if that safeguard is delibe
 
 At the first rollout, verify policy test rejection without applying a broken policy: after a
 successful good apply, temporarily add `"tag:server"` to the grant's `src`, run
-`make tailnet-plan`, and expect the `tag:server` → Personal-host denial tests to fail. Restore
-the grant and run `make tailnet-plan` again. **Do not apply the deliberately broken edit.**
-This live check is **UNVERIFIED**. `make test` runs credential-free `tofu validate`; only a real
-plan/apply evaluates Tailscale's policy tests. See the
+`make tailnet-plan`, and expect it to exit nonzero after `policy tests: FAILED`, listing the
+four `tag:server` → owner denial tests (`want: Drop, got: Accept`). Restore the grant and run
+`make tailnet-plan` again: it must report `No changes` and `policy tests: passed`.
+**Do not apply the deliberately broken edit.** `make test` runs credential-free `tofu validate`
+and unit-tests the verdict on validate responses; only `make tailnet-plan` or `make tailnet-apply`
+evaluates the live policy's tests. See the
 [provider's policy resource](https://registry.terraform.io/providers/tailscale/tailscale/latest/docs/resources/acl).
 
 ## 3. Enroll the desktop PC as Always-on

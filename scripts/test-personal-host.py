@@ -445,7 +445,7 @@ INSTALLER
         (self.bin / "t3").unlink()
         for command in ("bash", "dirname", "sed", "tr", "jq", "ssh-keygen", "awk",
                         "chmod", "mkdir", "mktemp", "cat", "cmp", "install", "rm",
-                        "mv", "cp", "grep", "head", "sort", "cut", "sh", "python3"):
+                        "mv", "cp", "grep", "head", "sort", "cut", "sh", "python3", "test", "sleep"):
             (self.bin / command).symlink_to(shutil.which(command))
         self.env["PATH"] = str(self.bin)
         result = self.local()
@@ -551,7 +551,7 @@ class PersonalDoorTests(unittest.TestCase):
         result = self.local("", "status")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("SSH unit: inactive", result.stdout)
-        self.assertIn("SSH starts at boot: inactive", result.stdout)
+        self.assertIn("SSH starts at boot: disabled", result.stdout)
         self.assertIn("T3 service: active", result.stdout)
         self.assertIn("T3 Tailnet Serve: off", result.stdout)
         self.assertIn("200 $2", result.stdout)
@@ -716,7 +716,7 @@ elif name == "systemctl":
         if action == "is-enabled" and unit.get("masked"):
             print("masked")
             sys.exit(1)
-        print(action[3:] if value else "inactive")
+        print(action[3:] if value else ("disabled" if action == "is-enabled" else "inactive"))
         sys.exit(0 if value else 1)
     for unit in units:
         entry = state.setdefault(unit, {})

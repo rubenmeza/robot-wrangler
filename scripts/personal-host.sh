@@ -357,6 +357,9 @@ _status() {
   ssh_enabled=$(systemctl is-enabled sshd.service 2>/dev/null || true)
   socket_active=$(systemctl is-active sshd.socket 2>/dev/null || true)
   socket_enabled=$(systemctl is-enabled sshd.socket 2>/dev/null || true)
+  if [ -z "$ssh_active" ] || [ -z "$ssh_enabled" ] || [ -z "$socket_active" ] || [ -z "$socket_enabled" ]; then
+    failed=1
+  fi
   printf 'Personal host: %s (%s)\nSSH unit: %s\nSSH starts at boot: %s\nSSH socket: %s; boot: %s\n' \
     "$host_name" "$reachability" "${ssh_active:-unknown}" "${ssh_enabled:-unknown}" \
     "${socket_active:-unknown}" "${socket_enabled:-unknown}"
@@ -386,6 +389,7 @@ _status() {
     printf 'T3 Tailnet Serve: unknown (inspection failed).\n'; failed=1
   fi
   t3_active=$(systemctl --user is-active t3code.service 2>/dev/null || true)
+  [ -n "$t3_active" ] || failed=1
   printf 'T3 service: %s\n' "${t3_active:-unknown}"
   if tmux_sessions=$(tmux list-sessions 2>/dev/null); then
     printf 'tmux sessions:\n%s\n' "$tmux_sessions"

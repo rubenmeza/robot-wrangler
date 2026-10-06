@@ -10,9 +10,12 @@ state_file="$config_dir/personal-host.json"
 _fail() { printf '%s\n' "$*" >&2; exit 1; }
 
 _personal_preflight() {
-  local os_id command status
+  local os_id os_like command status
   os_id=$(sed -n 's/^ID=//p' "$host_root/etc/os-release" | tr -d '"')
-  [ "$os_id" = arch ] || _fail 'Enrollment supports Arch/Omarchy only.'
+  os_like=$(sed -n 's/^ID_LIKE=//p' "$host_root/etc/os-release" | tr -d '"')
+  # Omarchy 4 reports ID=omarchy with ID_LIKE=arch; plain Arch reports ID=arch.
+  [ "$os_id" = arch ] || [[ " $os_like " == *" arch "* ]] ||
+    _fail 'Enrollment supports Arch/Omarchy only.'
   for command in sudo tailscale jq ssh-keygen; do
     command -v "$command" >/dev/null || _fail "Missing $command; install it before enrollment."
   done

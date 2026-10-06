@@ -48,7 +48,7 @@ class PersonalHostTests(unittest.TestCase):
         dispatcher.write_text(FAKE_COMMAND)
         dispatcher.chmod(0o755)
         for name in ("sudo", "tailscale", "systemctl", "loginctl", "ufw", "sshd",
-                     "tmux", "pacman", "id", "pgrep", "pkill", "ss", "moshi-hook"):
+                     "tmux", "pacman", "id", "pgrep", "pkill", "ss", "t3", "curl", "moshi-hook"):
             (self.bin / name).symlink_to(dispatcher)
         self.public_keys = {}
         for name in ("robot_ed25519", "pixel", "ipad"):
@@ -367,6 +367,97 @@ INSTALLER
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(["systemctl", "enable", "sshd.service"], self.calls("systemctl"))
 
+    def test_enrollment_runs_private_tailnet_t3_service_and_enables_resume(self):
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        settings = self.home / ".t3/userdata/settings.json"
+        self.assertTrue(settings.exists(), "Enrollment must configure T3 resume")
+        self.assertTrue(json.loads(settings.read_text())["continueThreadsAfterServerUpdate"])
+        unit = self.home / ".config/systemd/user/t3code.service"
+        dropin = unit.with_suffix(".service.d") / "10-tailnet.conf"
+        self.assertIn("T3CODE_TRACE_MIN_LEVEL=Warn", unit.read_text())
+        self.assertIn("T3CODE_TAILSCALE_SERVE=true", dropin.read_text())
+        for path in (settings, unit, dropin):
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        launcher = self.home / ".config/t3code/start.sh"
+        self.assertIn("--host 127.0.0.1 --port 3773 --log-level warn", launcher.read_text())
+        self.assertIn(["loginctl", "enable-linger", "owner"], self.calls("loginctl"))
+        self.assertIn(["systemctl", "--user", "enable", "t3code.service"], self.calls("systemctl"))
+        self.assertIn(["systemctl", "--user", "restart", "t3code.service"], self.calls("systemctl"))
+        self.assertEqual(self.calls("t3"), [], "Enrollment must never run pairing or native service install")
+        self.assertEqual(self.calls("curl"), [], "Existing Omarchy T3 must be kept")
+
+    def test_enrollment_shows_manual_pairing_for_exact_registered_device_labels(self):
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("t3 pair --tailscale --label pixel", result.stdout)
+        self.assertIn("t3 pair --tailscale --label ipad", result.stdout)
+        self.assertIn("https://desk.example.ts.net", result.stdout)
+        self.assertIn("Never log", result.stdout)
+        self.assertNotIn("t3 pair --tailscale --label desk", result.stdout)
+        self.assertEqual(self.calls("t3"), [])
+
+    def test_t3_enrollment_preserves_settings_and_leaves_active_service_running(self):
+        settings = self.home / ".t3/userdata/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(json.dumps({"theme": "dark", "continueThreadsAfterServerUpdate": False}))
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(settings.read_text()),
+                         {"theme": "dark", "continueThreadsAfterServerUpdate": True})
+        paths = [settings, self.home / ".config/t3code/start.sh",
+                 self.home / ".config/systemd/user/t3code.service",
+                 self.home / ".config/systemd/user/t3code.service.d/10-tailnet.conf"]
+        before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths]
+        count = len(self.calls("systemctl"))
+        result = self.local("\n\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(before, [(path.read_bytes(), path.stat().st_mtime_ns) for path in paths])
+        calls = self.calls("systemctl")[count:]
+        self.assertNotIn(["systemctl", "--user", "daemon-reload"], calls)
+        self.assertNotIn(["systemctl", "--user", "restart", "t3code.service"], calls)
+        self.assertNotIn(["systemctl", "--user", "enable", "t3code.service"], calls)
+        self.assertEqual(self.calls("curl"), [])
+        self.assertEqual(self.calls("t3"), [])
+
+    def test_t3_enrollment_refuses_invalid_settings_without_replacing_them(self):
+        settings = self.home / ".t3/userdata/settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text("{broken settings")
+        result = self.local()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("valid JSON object", result.stderr)
+        self.assertEqual(settings.read_text(), "{broken settings")
+        self.assertNotIn(["systemctl", "--user", "restart", "t3code.service"], self.calls("systemctl"))
+        self.assertFalse((self.home / ".config/robot-wrangler/personal-host.json").exists())
+
+    def test_t3_enrollment_starts_owner_user_manager_with_matching_runtime_directory(self):
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(["systemctl", "start", "user@1000.service"], self.calls("systemctl"))
+        runtime_dirs = (self.root / "user-runtime-dirs.jsonl").read_text().splitlines()
+        self.assertTrue(runtime_dirs)
+        self.assertEqual(set(runtime_dirs), {'"/run/user/1000"'})
+
+    def test_t3_enrollment_installs_standalone_when_package_is_missing(self):
+        # A controlled PATH excludes the machine's real T3 and any network installer.
+        (self.bin / "t3").unlink()
+        for command in ("bash", "dirname", "sed", "tr", "jq", "ssh-keygen", "awk",
+                        "chmod", "mkdir", "mktemp", "cat", "cmp", "install", "rm",
+                        "mv", "cp", "grep", "head", "sort", "cut", "sh", "python3"):
+            (self.bin / command).symlink_to(shutil.which(command))
+        self.env["PATH"] = str(self.bin)
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls("curl"), [["curl", "-fsSL", "https://t3.codes/install.sh"]])
+        binary = self.home / ".local/bin/t3"
+        self.assertTrue(binary.is_file())
+        self.assertTrue(os.access(binary, os.X_OK))
+        self.assertIn(str(binary), (self.home / ".config/t3code/start.sh").read_text())
+        result = self.local("\n\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(len(self.calls("curl")), 1)
+
 
 FAKE_COMMAND = r'''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
@@ -396,6 +487,13 @@ elif name == "tailscale":
         for ip in state["Self"]["TailscaleIPs"]:
             if (args[-1] == "-4" and ":" not in ip) or (args[-1] == "-6" and ":" in ip):
                 print(ip)
+elif name == "curl":
+    if args != ["-fsSL", "https://t3.codes/install.sh"]:
+        print("Unexpected installer URL", file=sys.stderr)
+        sys.exit(1)
+    print('mkdir -p "$HOME/.local/bin"\n'
+          'printf "#!/bin/sh\\nexit 0\\n" > "$HOME/.local/bin/t3"\n'
+          'chmod 700 "$HOME/.local/bin/t3"')
 elif name == "sshd":
     if (root / "invalid-sshd").exists():
         print("invalid sshd config", file=sys.stderr)
@@ -410,6 +508,9 @@ elif name == "sshd":
         print("authorizedkeyscommand /usr/local/bin/external-keys" if (root / "external-ssh-authorization").exists()
               else "authorizedkeyscommand none")
 elif name == "systemctl":
+    if "--user" in args:
+        with (root / "user-runtime-dirs.jsonl").open("a") as stream:
+            stream.write(json.dumps(os.environ.get("XDG_RUNTIME_DIR")) + "\n")
     if args == ["--user", "show-environment"]:
         sys.exit(1 if (root / "missing-user-manager").exists() else 0)
     state_path = root / "systemctl.json"

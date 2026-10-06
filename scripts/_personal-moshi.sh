@@ -3,7 +3,9 @@
 # Globals host_name and owner come from the enrollment command.
 # shellcheck disable=SC2154
 _enroll_moshi() {
-  local moshi metadata token paired
+  local moshi metadata token paired XDG_RUNTIME_DIR
+  XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  export XDG_RUNTIME_DIR
   systemctl --user show-environment >/dev/null 2>&1 ||
     _fail 'Moshi needs your systemd user manager; log in locally as the owner and retry enrollment.'
   moshi=$(command -v moshi-hook || true)

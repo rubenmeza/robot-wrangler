@@ -1,4 +1,4 @@
-.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply
+.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll
 .DEFAULT_GOAL := help
 
 help: ## show this help
@@ -13,6 +13,7 @@ test: ## validate Tailnet policy and run script tests (optional Provisioner cont
 	@tofu -chdir=tailnet validate
 	@./scripts/test-common.sh
 	@python3 scripts/test-robot-update.py
+	@python3 scripts/test-personal-host.py
 	@./scripts/test-provision.sh
 
 robot-wrangler: ## provision the box, join the tailnet, push the agent token (idempotent)
@@ -59,3 +60,6 @@ tailnet-apply: ## apply the whole Tailnet policy (separate state from the Robot 
 		: "$${TF_VAR_tailnet_owner:?set TF_VAR_tailnet_owner in .env}"; \
 		tofu -chdir=tailnet init -input=false; \
 		tofu -chdir=tailnet apply
+
+enroll: ## enroll this Arch/Omarchy machine as a Personal host
+	@./scripts/personal-host.sh enroll

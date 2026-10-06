@@ -64,7 +64,7 @@ Back up the existing **Access Controls** policy before the first apply. Review t
 
 ```bash
 make tailnet-plan           # shows the plan, then runs the policy tests; saves nothing
-make tailnet-apply          # runs the policy tests, then prompts before replacing the entire live policy
+make tailnet-apply          # runs the policy tests, then prompts before replacing the live policy
 ```
 
 The provider does not run Tailscale's policy tests during `tofu plan`; a plan that breaks a deny
@@ -196,11 +196,12 @@ At a trusted terminal on the host being paired, run this example for the Pixel:
 t3 pair --tailscale --label pixel
 ```
 
-Scan its one-time code with the Pixel's T3 client. Repeat for `ipad`, and for the other Personal
-host's exact device name. Use the same exact name as the Tailnet node and `devices/<name>.pub`,
-without `.pub`, as the label. Do not use a model name or a guessed prefix. Pairings are per
-(device, host); they do not propagate through git. Codes and pairing URLs are **passwords**:
-never log, commit or screenshot them. Close the laptop when finished.
+Scan its one-time code from the Pixel's T3 app (**Settings → Environments**, add an environment),
+not with the phone camera: the camera opens a browser session instead. Repeat for `ipad`, and
+for the other Personal host's exact device name. Use the same exact name as the Tailnet node and
+`devices/<name>.pub`, without `.pub`, as the label. Do not use a model name or a guessed
+prefix. Pairings are per (device, host); they do not propagate through git. Codes and pairing
+URLs are **passwords**: never log, commit or screenshot them. Close the laptop when finished.
 
 For Moshi terminal access, add each Personal host's Tailnet name and **its Unix user**, selecting
 that mobile device's SSH key. An interactive login lands in the most recent tmux session. From
@@ -348,6 +349,10 @@ enrollment, pairing, reboot, rebuild or revoke is implied by automated tests.
 - **T3 is unreachable:** check `make status`, the host's mode, Tailnet policy and Tailscale
   connection. For an Open-by-hand host, run `make open` at its keyboard. T3 service activity
   alone does not mean its Tailnet door is open.
+- **T3 app shows "The environment credential is invalid" after scanning:** with app 1.4.0 and
+  server 0.0.45 this warning appears before the code is redeemed. Tap **Add** anyway. To confirm,
+  `t3 auth session list` on the host should show a new `bearer-access-token` session with the
+  device's label. If none appears, mint a fresh code (`--ttl 15m`) and retry.
 - **Robot never joins / `wait-ready` times out:** check the applied policy and fresh, pre-approved
   `tag:server` auth key, and remove a stale robot node. There is no public SSH. Use DigitalOcean's
   out-of-band Recovery Console and the console credentials from ADR 0005 to inspect

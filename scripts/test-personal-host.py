@@ -196,6 +196,12 @@ INSTALLER
         self.assertIn("Arch/Omarchy", result.stderr)
         self.assertEqual(self.calls("sudo"), [])
 
+    def test_enrollment_accepts_omarchy_os_release_derived_from_arch(self):
+        (self.host / "etc/os-release").write_text('NAME="Omarchy"\nID=omarchy\nID_LIKE=arch\n')
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Arch/Omarchy", result.stderr)
+
     def test_enrollment_requires_running_tailnet_magicdns_and_https(self):
         for state, field, value, message in (
                 (self.state, "BackendState", "Stopped", "Tailscale"),

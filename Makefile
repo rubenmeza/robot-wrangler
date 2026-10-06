@@ -1,4 +1,4 @@
-.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status
+.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply
 .DEFAULT_GOAL := help
 
 help: ## show this help
@@ -8,7 +8,9 @@ help: ## show this help
 preflight: ## check deps, secrets, local tailnet, and doctl auth
 	@./scripts/preflight.sh
 
-test: ## run script tests (requires python3; optional Provisioner container smoke)
+test: ## validate Tailnet policy and run script tests (optional Provisioner container smoke)
+	@tofu -chdir=tailnet init -backend=false -input=false -lockfile=readonly
+	@tofu -chdir=tailnet validate
 	@./scripts/test-common.sh
 	@python3 scripts/test-robot-update.py
 	@./scripts/test-provision.sh
@@ -41,3 +43,19 @@ robot-status: ## show droplet + tailnet status
 	@doctl compute droplet list --tag-name robot --format Name,PublicIPv4,Status,Region,Memory,VCPUs || true
 	@echo
 	@tailscale status 2>/dev/null | grep -E 'robot' || echo "robot not visible on the tailnet"
+
+tailnet-plan: ## validate policy tests and preview the whole Tailnet policy change
+	@set -eu; set -a; . ./.env; set +a; \
+		: "$${TAILSCALE_API_KEY:?set TAILSCALE_API_KEY in .env}"; \
+		: "$${TAILSCALE_TAILNET:?set TAILSCALE_TAILNET in .env}"; \
+		: "$${TF_VAR_tailnet_owner:?set TF_VAR_tailnet_owner in .env}"; \
+		tofu -chdir=tailnet init -input=false; \
+		tofu -chdir=tailnet plan -input=false
+
+tailnet-apply: ## apply the whole Tailnet policy (separate state from the Robot server)
+	@set -eu; set -a; . ./.env; set +a; \
+		: "$${TAILSCALE_API_KEY:?set TAILSCALE_API_KEY in .env}"; \
+		: "$${TAILSCALE_TAILNET:?set TAILSCALE_TAILNET in .env}"; \
+		: "$${TF_VAR_tailnet_owner:?set TF_VAR_tailnet_owner in .env}"; \
+		tofu -chdir=tailnet init -input=false; \
+		tofu -chdir=tailnet apply

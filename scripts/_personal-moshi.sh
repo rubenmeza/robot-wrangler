@@ -22,7 +22,7 @@ _enroll_moshi() {
   # Local status is supported metadata; never echo the document or inspect secret files.
   metadata=$("$moshi" status --json 2>/dev/null) ||
     _fail 'Cannot read Moshi pairing metadata; check moshi-hook status at the keyboard.'
-  paired=$(jq -er 'if (.paired | type) == "boolean" then .paired | tostring else error("invalid") end' \
+  paired=$(jq -er 'if (.paired | type) == "boolean" and (.hooks | type) == "array" then .paired | tostring else error("invalid") end' \
     <<< "$metadata" 2>/dev/null) || _fail 'Invalid Moshi pairing metadata; check moshi-hook status at the keyboard.'
   if [ "$paired" = false ]; then
     token="${MOSHI_PAIRING_TOKEN:-}"

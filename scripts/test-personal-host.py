@@ -172,7 +172,8 @@ INSTALLER
         self.assertEqual(self.calls("moshi-hook"), [])
 
     def test_invalid_moshi_pairing_metadata_never_re_pairs_or_prints_document(self):
-        for metadata in ('invalid synthetic-secret-json', '{"paired":"unknown","secret":"synthetic-secret-json"}'):
+        for metadata in ('invalid synthetic-secret-json', '{"paired":"unknown","secret":"synthetic-secret-json"}',
+                         '{"paired":true,"secret":"synthetic-secret-json"}'):
             with self.subTest(metadata=metadata):
                 (self.root / "moshi-status.json").write_text(metadata)
                 result = self.local()

@@ -196,9 +196,10 @@ At a trusted terminal on the host being paired, run this example for the Pixel:
 t3 pair --tailscale --label pixel
 ```
 
-Scan its one-time code with the Pixel's T3 client. Repeat for `ipad`, and for the other Personal
-host's exact device name. Use the same exact name as the Tailnet node and `devices/<name>.pub`,
-without `.pub`, as the label. Do not use a model name or a guessed prefix. Pairings are per
+Scan its one-time code from the Pixel's T3 app (**Settings → Environments**, add an environment),
+not with the phone camera: the camera opens a browser session instead. Repeat for `ipad`, and
+for the other Personal host's exact device name. Use the same exact name as the Tailnet node and
+`devices/<name>.pub`, without `.pub`, as the label. Do not use a model name or a guessed prefix. Pairings are per
 (device, host); they do not propagate through git. Codes and pairing URLs are **passwords**:
 never log, commit or screenshot them. Close the laptop when finished.
 
@@ -348,6 +349,10 @@ enrollment, pairing, reboot, rebuild or revoke is implied by automated tests.
 - **T3 is unreachable:** check `make status`, the host's mode, Tailnet policy and Tailscale
   connection. For an Open-by-hand host, run `make open` at its keyboard. T3 service activity
   alone does not mean its Tailnet door is open.
+- **T3 app shows "The environment credential is invalid" after scanning:** with app 1.4.0 and
+  server 0.0.45 this warning appears before the code is redeemed. Tap **Add** anyway. To confirm,
+  `t3 auth session list` on the host should show a new `bearer-access-token` session with the
+  device's label. If none appears, mint a fresh code (`--ttl 15m`) and retry.
 - **Robot never joins / `wait-ready` times out:** check the applied policy and fresh, pre-approved
   `tag:server` auth key, and remove a stale robot node. There is no public SSH. Use DigitalOcean's
   out-of-band Recovery Console and the console credentials from ADR 0005 to inspect

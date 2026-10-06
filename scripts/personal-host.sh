@@ -251,9 +251,35 @@ _enroll_power() {
   fi
 }
 
+# True when Tailscale Serve publishes HTTPS 443 (T3's Tailnet door) in serve status JSON.
+serve_published_filter='(.TCP // {} | has("443")) or (.Web // {} | keys | any(endswith(":443")))'
+
+# `tailscale serve --https=443 off` fails ("handler does not exist") when nothing is published,
+# so remove the handler only if it is there. Unreadable status fails closed: never assume off.
+_serve_off() {
+  local serve_json
+  serve_json=$(tailscale serve status --json) || return 1
+  jq -e 'type == "object"' <<< "$serve_json" >/dev/null || return 1
+  jq -e "$serve_published_filter" <<< "$serve_json" >/dev/null || return 0
+  tailscale serve --https=443 off
+}
+
 _enroll_doors() {
   local unit="$host_root/etc/systemd/system/robot-wrangler-serve-off.service"
+  local helper="$host_root/usr/local/libexec/robot-wrangler-serve-off"
   if [ "$reachability" = open-by-hand ]; then
+    # Same check as _serve_off, standalone for boot: an unpublished handler is already off,
+    # and unreadable status exits nonzero so the unit retries instead of assuming closed.
+    _write_system_file "$helper" 755 <<'HELPER'
+#!/bin/sh
+set -eu
+json=$(/usr/bin/tailscale serve status --json)
+printf '%s' "$json" | /usr/bin/jq -e 'type == "object"' >/dev/null
+printf '%s' "$json" |
+  /usr/bin/jq -e '(.TCP // {} | has("443")) or (.Web // {} | keys | any(endswith(":443")))' >/dev/null ||
+  exit 0
+exec /usr/bin/tailscale serve --https=443 off
+HELPER
     _write_system_file "$unit" 644 <<'UNIT'
 [Unit]
 Description=Close robot-wrangler T3 Tailnet door at boot
@@ -262,7 +288,7 @@ After=tailscaled.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/tailscale serve --https=443 off
+ExecStart=/usr/local/libexec/robot-wrangler-serve-off
 RemainAfterExit=yes
 Restart=on-failure
 RestartSec=2
@@ -276,7 +302,7 @@ UNIT
     _close_doors || _fail 'Could not close inbound doors during enrollment.'
   elif sudo test -f "$unit"; then
     sudo systemctl disable --now robot-wrangler-serve-off.service
-    sudo rm -f "$unit"
+    sudo rm -f "$unit" "$helper"
     sudo systemctl daemon-reload
   fi
 }
@@ -343,7 +369,7 @@ _close_doors() {
       done
     fi
   done
-  if ! tailscale serve --https=443 off; then
+  if ! _serve_off; then
     printf 'Failed to turn T3 Tailnet Serve off.\n' >&2; failed=1
   fi
   if [ "$failed" -ne 0 ]; then
@@ -415,7 +441,7 @@ _status() {
     fi
   done
   if serve_json=$(tailscale serve status --json) && jq -e 'type == "object"' <<< "$serve_json" >/dev/null; then
-    if jq -e '(.TCP // {} | has("443")) or (.Web // {} | keys | any(endswith(":443")))' <<< "$serve_json" >/dev/null; then
+    if jq -e "$serve_published_filter" <<< "$serve_json" >/dev/null; then
       serve_state=on; unexpected=1
     else serve_state=off; fi
     printf 'T3 Tailnet Serve: %s\nServe configuration: %s\n' "$serve_state" "$(jq -c . <<< "$serve_json")"

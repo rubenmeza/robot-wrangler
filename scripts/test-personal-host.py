@@ -74,6 +74,10 @@ class PersonalHostTests(unittest.TestCase):
                               cwd=self.root, env=self.env, input=answer, text=True,
                               capture_output=True, timeout=15)
 
+    def serve_published(self):
+        path = self.root / "serve.json"
+        return path.exists() and "443" in json.loads(path.read_text()).get("TCP", {})
+
     def calls(self, name=None):
         path = self.root / "calls.jsonl"
         calls = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
@@ -520,6 +524,7 @@ class PersonalDoorTests(unittest.TestCase):
     stub = PersonalHostTests.stub
     local = PersonalHostTests.local
     calls = PersonalHostTests.calls
+    serve_published = PersonalHostTests.serve_published
     def test_open_by_hand_enrollment_keeps_doors_closed_and_power_untouched(self):
         (self.root / "missing-sshd-socket").touch()
         result = self.local("laptop\nopen-by-hand\n")
@@ -534,9 +539,13 @@ class PersonalDoorTests(unittest.TestCase):
         unit = (self.host / "etc/systemd/system/robot-wrangler-serve-off.service").read_text()
         self.assertIn("After=tailscaled.service", unit)
         self.assertIn("Requires=tailscaled.service", unit)
-        self.assertIn("ExecStart=/usr/bin/tailscale serve --https=443 off", unit)
+        self.assertIn("ExecStart=/usr/local/libexec/robot-wrangler-serve-off", unit)
         self.assertNotIn("User=", unit)
-        self.assertIn(["tailscale", "serve", "--https=443", "off"], self.calls("tailscale"))
+        helper = self.host / "usr/local/libexec/robot-wrangler-serve-off"
+        self.assertTrue(os.access(helper, os.X_OK))
+        # A fresh host never published T3: closing must not try to remove a missing handler.
+        self.assertIn(["tailscale", "serve", "status", "--json"], self.calls("tailscale"))
+        self.assertNotIn(["tailscale", "serve", "--https=443", "off"], self.calls("tailscale"))
         result = self.local("\n\n")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -646,7 +655,38 @@ class PersonalDoorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("opening failed", result.stderr)
         self.assertFalse(json.loads((self.root / "systemctl.json").read_text())["sshd.service"]["active"])
-        self.assertEqual(json.loads((self.root / "serve.json").read_text()), {})
+        self.assertFalse(self.serve_published())
+
+    def test_close_is_idempotent_and_fails_closed_when_serve_status_is_unreadable(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.local("", "close")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("doors closed", result.stdout)
+        (self.root / "serve.json").write_text(json.dumps({"TCP": {"443": {"HTTPS": True}}}))
+        result = self.local("", "close")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.serve_published())
+        (self.root / "fail-serve-status").touch()
+        result = self.local("", "close")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Failed to turn T3", result.stderr)
+
+    def test_boot_helper_closes_only_a_published_door_and_retries_unreadable_status(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        helper = (self.host / "usr/local/libexec/robot-wrangler-serve-off").read_text()
+        local_helper = self.root / "serve-off-helper"
+        local_helper.write_text(helper.replace("/usr/bin/tailscale", "tailscale").replace("/usr/bin/jq", "jq"))
+        run = lambda: subprocess.run(["sh", str(local_helper)], env=self.env, text=True, capture_output=True)
+        result = run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.root / "serve.json").write_text(json.dumps({"TCP": {"443": {"HTTPS": True}}}))
+        result = run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.serve_published())
+        (self.root / "fail-serve-status").touch()
+        self.assertNotEqual(run().returncode, 0)
 
     def test_close_escalates_stubborn_handlers_and_reports_failures_without_stopping_work(self):
         result = self.local("laptop\nopen-by-hand\n")
@@ -659,6 +699,7 @@ class PersonalDoorTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root / "processes.json").read_text()), {"206": "t3"})
         (self.root / "processes.json").write_text(json.dumps({"201": "sshd-session", "202": "sshd-session", "206": "t3"}))
         (self.root / "fail-kill").touch()
+        (self.root / "serve.json").write_text(json.dumps({"TCP": {"443": {"HTTPS": True}}}))
         (self.root / "fail-serve-off").touch()
         result = self.local("", "close")
         self.assertNotEqual(result.returncode, 0)
@@ -676,7 +717,7 @@ class PersonalDoorTests(unittest.TestCase):
         result = self.local("", "open")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Could not start SSH", result.stderr)
-        self.assertEqual(json.loads((self.root / "serve.json").read_text()), {})
+        self.assertFalse(self.serve_published())
         (self.root / "fail-pgrep").touch()
         result = self.local("", "status")
         self.assertNotEqual(result.returncode, 0)
@@ -713,11 +754,18 @@ elif name == "tailscale":
     if args == ["status", "--json"]:
         print(json.dumps(state))
     elif args == ["serve", "status", "--json"]:
+        if (root / "fail-serve-status").exists():
+            sys.exit(1)
         print((root / "serve.json").read_text() if (root / "serve.json").exists() else "{}")
     elif args[:1] == ["serve"]:
         if (args[-1] == "off" and (root / "fail-serve-off").exists()) or (args[-1] != "off" and (root / "fail-serve-publish").exists()):
             sys.exit(1)
         if args[-1] == "off":
+            current = json.loads((root / "serve.json").read_text()) if (root / "serve.json").exists() else {}
+            if "443" not in current.get("TCP", {}):
+                # Real tailscale refuses to remove a handler that was never published.
+                print("error: failed to remove web serve: handler does not exist", file=sys.stderr)
+                sys.exit(1)
             (root / "serve.json").write_text("{}")
         else:
             (root / "serve.json").write_text(json.dumps({"TCP": {"443": {"HTTPS": True}}}))

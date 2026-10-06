@@ -48,7 +48,7 @@ class PersonalHostTests(unittest.TestCase):
         dispatcher.write_text(FAKE_COMMAND)
         dispatcher.chmod(0o755)
         for name in ("sudo", "tailscale", "systemctl", "loginctl", "ufw", "sshd",
-                     "tmux", "pacman", "id", "pgrep", "pkill", "ss", "t3", "curl"):
+                     "tmux", "pacman", "id", "pgrep", "pkill", "ss", "t3", "curl", "kill"):
             (self.bin / name).symlink_to(dispatcher)
         self.public_keys = {}
         for name in ("robot_ed25519", "pixel", "ipad"):
@@ -357,6 +357,180 @@ class PersonalHostTests(unittest.TestCase):
         self.assertEqual(len(self.calls("curl")), 1)
 
 
+class PersonalDoorTests(unittest.TestCase):
+    setUp = PersonalHostTests.setUp
+    write_tailscale = PersonalHostTests.write_tailscale
+    stub = PersonalHostTests.stub
+    local = PersonalHostTests.local
+    calls = PersonalHostTests.calls
+    def test_open_by_hand_enrollment_keeps_doors_closed_and_power_untouched(self):
+        (self.root / "missing-sshd-socket").touch()
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        units = json.loads((self.root / "systemctl.json").read_text())
+        self.assertFalse(units["sshd.service"]["enabled"])
+        self.assertFalse(units["sshd.service"]["active"])
+        self.assertTrue(units["sshd.socket"]["masked"])
+        self.assertNotIn("suspend.target", units)
+        self.assertIn("T3CODE_TAILSCALE_SERVE=false",
+                      (self.home / ".config/systemd/user/t3code.service.d/10-tailnet.conf").read_text())
+        unit = (self.host / "etc/systemd/system/robot-wrangler-serve-off.service").read_text()
+        self.assertIn("After=tailscaled.service", unit)
+        self.assertIn("Requires=tailscaled.service", unit)
+        self.assertIn("ExecStart=/usr/bin/tailscale serve --https=443 off", unit)
+        self.assertNotIn("User=", unit)
+        self.assertIn(["tailscale", "serve", "--https=443", "off"], self.calls("tailscale"))
+        result = self.local("\n\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_mode_change_restores_only_enrollment_owned_power_masks(self):
+        (self.root / "systemctl.json").write_text(json.dumps({"suspend.target": {"masked": True}}))
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.local("\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        units = json.loads((self.root / "systemctl.json").read_text())
+        self.assertTrue(units["suspend.target"]["masked"])
+        for target in ("sleep.target", "hibernate.target", "hybrid-sleep.target"):
+            self.assertFalse(units[target]["masked"])
+        result = self.local("\nalways-on\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.host / "etc/systemd/system/robot-wrangler-serve-off.service").exists())
+        self.assertTrue(json.loads((self.root / "systemctl.json").read_text())["sshd.service"]["enabled"])
+
+    def test_interactive_mosh_without_ssh_tty_attaches_but_commands_do_not(self):
+        result = self.local()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        snippet = self.home / ".config/robot-wrangler/ssh-tmux.sh"
+        env = self.env | {"SSH_CONNECTION": "100.64.0.3 4000 100.64.0.2 22", "TMUX": ""}
+        env.pop("SSH_TTY", None)
+        for interactive in (True, False):
+            count = len(self.calls("tmux"))
+            result = subprocess.run(["bash", "--norc", "-ic" if interactive else "-c",
+                                     '. "$1"', "bash", str(snippet)], env=env,
+                                    text=True, capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = self.calls("tmux")[count:]
+            self.assertEqual(bool(calls), interactive)
+            if interactive:
+                self.assertIn(["tmux", "attach-session", "-t", "$2"], calls)
+
+    def test_open_publishes_both_doors_and_close_preserves_work_and_outbound_clients(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.local("", "open")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("lid", result.stdout)
+        self.assertIn("tmux", result.stdout)
+        self.assertIn(["tailscale", "serve", "--bg", "--https=443", "http://127.0.0.1:3773"],
+                      self.calls("tailscale"))
+        self.assertTrue(json.loads((self.root / "systemctl.json").read_text())["sshd.service"]["active"])
+        processes = {"200": "sshd", "201": "sshd-session", "202": "sshd-auth",
+                     "203": "mosh-server", "204": "mosh-client", "205": "tmux",
+                     "206": "t3", "207": "claude", "208": "ssh", "209": "ssh-agent"}
+        (self.root / "processes.json").write_text(json.dumps(processes))
+        result = self.local("", "close")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        remaining = json.loads((self.root / "processes.json").read_text())
+        self.assertEqual(remaining, {pid: name for pid, name in processes.items() if int(pid) > 203})
+        for pid in ("200", "201", "202", "203"):
+            self.assertIn(pid, result.stdout)
+            self.assertIn(processes[pid], result.stdout)
+        self.assertIn(["tailscale", "serve", "--https=443", "off"], self.calls("tailscale"))
+        self.assertTrue(json.loads((self.root / "systemctl.json").read_text())["t3code.service"]["active"])
+        self.assertNotIn("--user", [arg for call in self.calls("systemctl") if "stop" in call for arg in call])
+        result = self.local("", "close")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_status_reports_real_state_and_warns_when_closed_or_previous_boot_is_open(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.local("", "status")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SSH unit: inactive", result.stdout)
+        self.assertIn("SSH starts at boot: inactive", result.stdout)
+        self.assertIn("T3 service: active", result.stdout)
+        self.assertIn("T3 Tailnet Serve: off", result.stdout)
+        self.assertIn("200 $2", result.stdout)
+        self.assertNotIn("WARNING", result.stdout)
+        units = json.loads((self.root / "systemctl.json").read_text())
+        units["sshd.service"]["active"] = True
+        (self.root / "systemctl.json").write_text(json.dumps(units))
+        (self.root / "listeners").write_text("LISTEN 0 128 100.64.0.2:22 0.0.0.0:* users:((sshd,pid=200))\n")
+        (self.root / "processes.json").write_text(json.dumps({"201": "sshd-session", "203": "mosh-server"}))
+        result = self.local("", "status")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for value in ("WARNING", "100.64.0.2:22", "sshd-session", "201", "mosh-server", "203"):
+            self.assertIn(value, result.stdout)
+        result = self.local("", "open")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        result = self.local("", "status")
+        self.assertNotIn("WARNING", result.stdout)
+        boot = self.host / "proc/sys/kernel/random/boot_id"
+        boot.parent.mkdir(parents=True)
+        boot.write_text("a-new-boot\n")
+        result = self.local("", "status")
+        self.assertIn("WARNING", result.stdout)
+
+    def test_open_refuses_disconnected_tailnet_and_rolls_back_publication_failure(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        count = len(self.calls("systemctl"))
+        self.state["BackendState"] = "Stopped"
+        self.write_tailscale()
+        result = self.local("", "open")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("neither door", result.stderr)
+        self.assertEqual(self.calls("systemctl")[count:], [])
+        self.state["BackendState"] = "Running"
+        self.write_tailscale()
+        (self.root / "fail-serve-publish").touch()
+        result = self.local("", "open")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("opening failed", result.stderr)
+        self.assertFalse(json.loads((self.root / "systemctl.json").read_text())["sshd.service"]["active"])
+        self.assertEqual(json.loads((self.root / "serve.json").read_text()), {})
+
+    def test_close_escalates_stubborn_handlers_and_reports_failures_without_stopping_work(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (self.root / "processes.json").write_text(json.dumps({"201": "sshd-session", "206": "t3"}))
+        (self.root / "ignore-term").touch()
+        result = self.local("", "close")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(["kill", "-KILL", "201"], self.calls("kill"))
+        self.assertEqual(json.loads((self.root / "processes.json").read_text()), {"206": "t3"})
+        (self.root / "processes.json").write_text(json.dumps({"201": "sshd-session", "202": "sshd-session", "206": "t3"}))
+        (self.root / "fail-kill").touch()
+        (self.root / "fail-serve-off").touch()
+        result = self.local("", "close")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Still live: sshd-session PIDs 201", result.stderr)
+        self.assertIn("Failed to turn T3", result.stderr)
+        self.assertIn("Close incomplete", result.stderr)
+        self.assertNotIn("Closed sshd-session PID 201", result.stdout)
+        self.assertNotIn("Closed sshd-session PID 202", result.stdout)
+        self.assertEqual(json.loads((self.root / "processes.json").read_text())["206"], "t3")
+
+    def test_open_failure_to_start_ssh_cleans_serve_and_status_flags_uninspectable_processes(self):
+        result = self.local("laptop\nopen-by-hand\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (self.root / "fail-start-sshd").touch()
+        result = self.local("", "open")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Could not start SSH", result.stderr)
+        self.assertEqual(json.loads((self.root / "serve.json").read_text()), {})
+        (self.root / "fail-pgrep").touch()
+        result = self.local("", "status")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("handlers/servers: unknown", result.stdout)
+        self.assertIn("could not be fully inspected", result.stdout)
+        result = self.local("", "close")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Close incomplete", result.stderr)
+        self.assertNotIn("doors closed", result.stdout)
+
+
 FAKE_COMMAND = r'''#!/usr/bin/env python3
 import json, os, pathlib, subprocess, sys
 root = pathlib.Path(os.environ["TEST_ROOT"])
@@ -381,6 +555,15 @@ elif name == "tailscale":
     state = json.loads((root / "tailscale.json").read_text())
     if args == ["status", "--json"]:
         print(json.dumps(state))
+    elif args == ["serve", "status", "--json"]:
+        print((root / "serve.json").read_text() if (root / "serve.json").exists() else "{}")
+    elif args[:1] == ["serve"]:
+        if (args[-1] == "off" and (root / "fail-serve-off").exists()) or (args[-1] != "off" and (root / "fail-serve-publish").exists()):
+            sys.exit(1)
+        if args[-1] == "off":
+            (root / "serve.json").write_text("{}")
+        else:
+            (root / "serve.json").write_text(json.dumps({"TCP": {"443": {"HTTPS": True}}}))
     elif args[:1] == ["ip"]:
         for ip in state["Self"]["TailscaleIPs"]:
             if (args[-1] == "-4" and ":" not in ip) or (args[-1] == "-6" and ":" in ip):
@@ -406,6 +589,7 @@ elif name == "sshd":
         print("authorizedkeyscommand /usr/local/bin/external-keys" if (root / "external-ssh-authorization").exists()
               else "authorizedkeyscommand none")
 elif name == "systemctl":
+    if args == ["start", "sshd.service"] and (root / "fail-start-sshd").exists(): sys.exit(1)
     if "--user" in args:
         with (root / "user-runtime-dirs.jsonl").open("a") as stream:
             stream.write(json.dumps(os.environ.get("XDG_RUNTIME_DIR")) + "\n")
@@ -418,17 +602,22 @@ elif name == "systemctl":
     if "sshd.socket" in args and args[:1] == ["disable"] and (root / "missing-sshd-socket").exists():
         print("Unit sshd.socket does not exist", file=sys.stderr)
         sys.exit(1)
+    now = "--now" in args
     args = [arg for arg in args if arg != "--now"]
     action, *units = args
     if action.startswith("is-"):
         unit = state.get(units[0], {})
         value = unit.get(action[3:], False)
+        if action == "is-enabled" and unit.get("masked"):
+            print("masked")
+            sys.exit(1)
         print(action[3:] if value else "inactive")
         sys.exit(0 if value else 1)
     for unit in units:
         entry = state.setdefault(unit, {})
         if action in ("enable", "disable"): entry["enabled"] = action == "enable"
         if action in ("start", "stop", "restart", "reload"): entry["active"] = action != "stop"
+        if now and action in ("enable", "disable"): entry["active"] = action == "enable"
         if action == "mask": entry["masked"] = True
         if action == "unmask": entry["masked"] = False
     state_path.write_text(json.dumps(state))
@@ -436,7 +625,22 @@ elif name == "tmux":
     if args[:1] == ["list-sessions"]:
         print("100 $1\n200 $2")
 elif name == "pgrep":
-    sys.exit(1)
+    if (root / "fail-pgrep").exists(): sys.exit(2)
+    path = root / "processes.json"
+    processes = json.loads(path.read_text()) if path.exists() else {}
+    import re
+    selected = [pid for pid, process in processes.items() if re.fullmatch(args[-1], process)]
+    if selected: print("\n".join(selected))
+    sys.exit(0 if selected else 1)
+elif name == "ss":
+    if (root / "listeners").exists(): print((root / "listeners").read_text())
+elif name == "kill":
+    path = root / "processes.json"
+    processes = json.loads(path.read_text()) if path.exists() else {}
+    if (root / "fail-kill").exists(): sys.exit(1)
+    if args[0] != "-TERM" or not (root / "ignore-term").exists():
+        for pid in args[1:]: processes.pop(pid, None)
+    path.write_text(json.dumps(processes))
 '''
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll
+.PHONY: help preflight test robot-wrangler robot-destroy robot-ssh robot-attach robot-auth robot-ip robot-status robot-update robot-update-status tailnet-plan tailnet-apply enroll open close status
 .DEFAULT_GOAL := help
 
 help: ## show this help
@@ -63,3 +63,12 @@ tailnet-apply: ## apply the whole Tailnet policy (separate state from the Robot 
 
 enroll: ## enroll this Arch/Omarchy machine as a Personal host
 	@./scripts/personal-host.sh enroll
+
+open: ## open SSH and T3 Tailnet doors on this Open-by-hand Personal host
+	@./scripts/personal-host.sh open
+
+close: ## hard-close inbound doors while keeping agents and outbound sessions running
+	@./scripts/personal-host.sh close
+
+status: ## report this Personal host's actual doors, inbound handlers and live work
+	@./scripts/personal-host.sh status

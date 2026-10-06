@@ -144,6 +144,10 @@ _enroll_ssh() {
   if [ "$socket_load" != not-found ]; then sudo systemctl disable --now sshd.socket; fi
   sudo systemctl mask sshd.socket
   sudo systemctl unmask sshd.service
+  if [ "$reachability" = open-by-hand ]; then
+    sudo systemctl disable --now sshd.service
+    return
+  fi
   if ! sudo systemctl is-enabled --quiet sshd.service; then sudo systemctl enable sshd.service; fi
   if sudo systemctl is-active --quiet sshd.service; then
     if [ "$changed" -eq 1 ]; then sudo systemctl reload sshd.service; fi
@@ -163,7 +167,7 @@ _enroll_tmux() {
 # Only interactive SSH shells outside tmux attach. File transfers and commands stay untouched.
 case $- in
   *i*)
-    if [ -n "${SSH_CONNECTION:-}" ] && [ -n "${SSH_TTY:-}" ] && [ -z "${TMUX:-}" ]; then
+    if [ -n "${SSH_CONNECTION:-}" ] && [ -z "${TMUX:-}" ]; then
       _robot_tmux_session=$(tmux list-sessions -F '#{session_last_attached} #{session_id}' 2>/dev/null |
         sort -rn | head -n 1 | cut -d ' ' -f 2)
       if [ -n "$_robot_tmux_session" ]; then
@@ -192,6 +196,217 @@ for personal_helper in scripts/_personal-t3.sh scripts/_personal-moshi.sh; do
   fi
 done
 
+_enroll_power() {
+  local masks="$config_dir/power-masks" target enabled owned=''
+  if [ "$reachability" = always-on ]; then
+    [ ! -f "$masks" ] || owned=$(cat "$masks")
+    for target in sleep.target suspend.target hibernate.target hybrid-sleep.target; do
+      enabled=$(sudo systemctl is-enabled "$target" 2>/dev/null || true)
+      if [ "$enabled" != masked ]; then
+        case " $owned " in *" $target "*) ;; *) owned="${owned:+$owned }$target" ;; esac
+      fi
+    done
+    printf '%s\n' "$owned" | _write_user_file "$masks" 600
+    sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+  elif [ -f "$masks" ]; then
+    for target in $(cat "$masks"); do
+      case "$target" in sleep.target|suspend.target|hibernate.target|hybrid-sleep.target)
+        sudo systemctl unmask "$target" ;; esac
+    done
+    rm -f "$masks"
+  fi
+}
+
+_enroll_doors() {
+  local unit="$host_root/etc/systemd/system/robot-wrangler-serve-off.service"
+  if [ "$reachability" = open-by-hand ]; then
+    _write_system_file "$unit" 644 <<'UNIT'
+[Unit]
+Description=Close robot-wrangler T3 Tailnet door at boot
+Requires=tailscaled.service
+After=tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tailscale serve --https=443 off
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo systemctl daemon-reload
+    sudo systemctl enable robot-wrangler-serve-off.service
+    _door_intent closed
+    _close_doors || _fail 'Could not close inbound doors during enrollment.'
+  elif sudo test -f "$unit"; then
+    sudo systemctl disable --now robot-wrangler-serve-off.service
+    sudo rm -f "$unit"
+    sudo systemctl daemon-reload
+  fi
+}
+
+_load_host() {
+  [ -f "$state_file" ] || _fail 'Enroll this Personal host first with make enroll.'
+  host_name=$(jq -er '.name' "$state_file") || _fail 'Invalid Personal-host enrollment state.'
+  reachability=$(jq -er '.mode' "$state_file") || _fail 'Invalid Personal-host enrollment state.'
+}
+
+_boot_id() { cat "${host_root}/proc/sys/kernel/random/boot_id" 2>/dev/null || cat /proc/sys/kernel/random/boot_id; }
+_door_intent() {
+  jq -n --arg boot "$(_boot_id)" --arg state "$1" '{boot:$boot,state:$state}' |
+    _write_user_file "$config_dir/door-intent.json" 600
+}
+
+_process_pids() {
+  local result rc=0
+  result=$(sudo pgrep -x "$1") || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    printf 'Could not inspect %s processes.\n' "$1" >&2
+    return 1
+  fi
+  printf '%s\n' "$result"
+}
+
+_close_doors() {
+  local failed=0 process pids pid remaining attempts inspected
+  if ! sudo systemctl stop sshd.service; then
+    printf 'Failed to stop SSH listener.\n' >&2; failed=1
+  fi
+  for process in sshd sshd-session sshd-auth mosh-server; do
+    remaining=''; inspected=1
+    if ! pids=$(_process_pids "$process"); then failed=1; continue; fi
+    for pid in $pids; do
+      if ! sudo kill -TERM "$pid"; then
+        # A process may exit between enumeration and signaling; only survivors fail.
+        if ! remaining=$(_process_pids "$process"); then failed=1; inspected=0; continue; fi
+        if grep -Fxq "$pid" <<< "$remaining"; then
+          printf 'Failed to terminate %s PID %s.\n' "$process" "$pid" >&2
+        fi
+      fi
+    done
+    attempts=0
+    while [ "$attempts" -lt 10 ]; do
+      if ! remaining=$(_process_pids "$process"); then failed=1; inspected=0; break; fi
+      [ -n "$remaining" ] || break
+      sleep 0.1
+      attempts=$((attempts + 1))
+    done
+    if [ -n "${remaining:-}" ]; then
+      for pid in $remaining; do
+        sudo kill -KILL "$pid" || printf 'SIGKILL failed for %s PID %s.\n' "$process" "$pid" >&2
+      done
+      sleep 0.1
+      if ! remaining=$(_process_pids "$process"); then failed=1; inspected=0; fi
+    fi
+    if [ -n "${remaining:-}" ]; then
+      printf 'Still live: %s PIDs %s.\n' "$process" "$remaining" >&2; failed=1
+    fi
+    if [ "$inspected" = 1 ]; then
+      for pid in $pids; do
+        if ! grep -Fxq "$pid" <<< "$remaining"; then printf 'Closed %s PID %s.\n' "$process" "$pid"; fi
+      done
+    fi
+  done
+  if ! tailscale serve --https=443 off; then
+    printf 'Failed to turn T3 Tailnet Serve off.\n' >&2; failed=1
+  fi
+  if [ "$failed" -ne 0 ]; then
+    printf 'Close incomplete; inspect make status before trusting the doors are closed.\n' >&2
+    return 1
+  fi
+  printf 'SSH and T3 Tailnet doors closed. T3, tmux and agents keep running.\n'
+}
+
+_open() {
+  _load_host
+  [ "$reachability" = open-by-hand ] || _fail 'Open is for Open-by-hand hosts; this host is Always-on.'
+  local status
+  status=$(tailscale status --json) || _fail 'Tailscale is not running; neither door was opened.'
+  jq -e '.BackendState == "Running" and .Self.Online == true' <<< "$status" >/dev/null ||
+    _fail 'Tailscale is not connected; neither door was opened.'
+  sudo -v
+  if ! sudo systemctl start sshd.service; then
+    _close_doors || true
+    _door_intent closed
+    _fail 'Could not start SSH; opening failed and door cleanup was attempted.'
+  fi
+  if ! tailscale serve --bg --https=443 http://127.0.0.1:3773; then
+    _close_doors || true
+    _door_intent closed
+    _fail 'Could not publish T3 Tailnet Serve; opening failed and door cleanup was attempted.'
+  fi
+  _door_intent open
+  printf 'Opened SSH and T3 Tailnet doors. Keep the lid up; keep work inside tmux or T3.\n'
+}
+
+_close() {
+  _load_host
+  [ "$reachability" = open-by-hand ] || _fail 'Close is for Open-by-hand hosts; this host is Always-on.'
+  sudo -v
+  _door_intent closed
+  _close_doors
+}
+
+_status() {
+  _load_host
+  local ssh_active ssh_enabled socket_active socket_enabled listeners serve_json serve_state=unknown
+  local t3_active process pids count unexpected=0 failed=0 intended=closed tmux_sessions
+  ssh_active=$(systemctl is-active sshd.service 2>/dev/null || true)
+  ssh_enabled=$(systemctl is-enabled sshd.service 2>/dev/null || true)
+  socket_active=$(systemctl is-active sshd.socket 2>/dev/null || true)
+  socket_enabled=$(systemctl is-enabled sshd.socket 2>/dev/null || true)
+  printf 'Personal host: %s (%s)\nSSH unit: %s\nSSH starts at boot: %s\nSSH socket: %s; boot: %s\n' \
+    "$host_name" "$reachability" "${ssh_active:-unknown}" "${ssh_enabled:-unknown}" \
+    "${socket_active:-unknown}" "${socket_enabled:-unknown}"
+  if listeners=$(sudo ss -H -ltnp '( sport = :22 )'); then
+    printf 'SSH listening addresses (actual TCP port 22):\n%s\n' "${listeners:-none}"
+  else
+    printf 'SSH listeners: unknown (inspection failed).\n'; failed=1
+  fi
+  if [ "$ssh_active" = active ] || [ "$ssh_enabled" = enabled ] ||
+    [ "$socket_active" = active ] || [ "$socket_enabled" = enabled ]; then unexpected=1; fi
+  [ -z "${listeners:-}" ] || unexpected=1
+  for process in sshd sshd-session sshd-auth mosh-server; do
+    if pids=$(_process_pids "$process"); then
+      count=$(awk 'NF {count++} END {print count+0}' <<< "$pids")
+      printf '%s handlers/servers: %s; PIDs: %s\n' "$process" "$count" "${pids:-none}"
+      [ "$count" = 0 ] || unexpected=1
+    else
+      printf '%s handlers/servers: unknown.\n' "$process"; failed=1
+    fi
+  done
+  if serve_json=$(tailscale serve status --json) && jq -e 'type == "object"' <<< "$serve_json" >/dev/null; then
+    if jq -e '(.TCP // {} | has("443")) or (.Web // {} | keys | any(endswith(":443")))' <<< "$serve_json" >/dev/null; then
+      serve_state=on; unexpected=1
+    else serve_state=off; fi
+    printf 'T3 Tailnet Serve: %s\nServe configuration: %s\n' "$serve_state" "$(jq -c . <<< "$serve_json")"
+  else
+    printf 'T3 Tailnet Serve: unknown (inspection failed).\n'; failed=1
+  fi
+  t3_active=$(systemctl --user is-active t3code.service 2>/dev/null || true)
+  printf 'T3 service: %s\n' "${t3_active:-unknown}"
+  if tmux_sessions=$(tmux list-sessions 2>/dev/null); then
+    printf 'tmux sessions:\n%s\n' "$tmux_sessions"
+  else printf 'tmux sessions: none or unavailable.\n'; fi
+  if [ -f "$config_dir/door-intent.json" ]; then
+    intended=$(jq -r --arg boot "$(_boot_id)" 'if .boot == $boot then .state else "closed" end' \
+      "$config_dir/door-intent.json" 2>/dev/null) || intended=closed
+  fi
+  if [ "$reachability" = open-by-hand ]; then
+    printf 'Door intent this boot: %s; reboot defaults to closed.\n' "$intended"
+    if [ "$intended" != open ] && [ "$unexpected" = 1 ]; then
+      printf 'WARNING: an Open-by-hand host intended closed has an open door or boot activation.\n'
+    fi
+    if [ "$ssh_enabled" = enabled ] || [ "$socket_enabled" = enabled ]; then
+      printf 'WARNING: SSH activation is enabled at boot; this Open-by-hand host must reboot closed.\n'
+    fi
+    if [ "$failed" != 0 ]; then printf 'WARNING: door state could not be fully inspected.\n'; fi
+  fi
+  [ "$failed" = 0 ]
+}
+
 _enroll() {
   _personal_preflight
   local previous_name='' previous_mode='always-on' answer
@@ -207,16 +422,17 @@ _enroll() {
   printf 'Reachability mode (always-on / open-by-hand) [%s]: ' "$previous_mode"
   read -r answer || _fail 'Enrollment needs a reachability mode at the keyboard.'
   reachability="${answer:-$previous_mode}"
-  [ "$reachability" = always-on ] || _fail 'This enrollment version supports always-on only.'
+  case "$reachability" in always-on|open-by-hand) ;; *) _fail 'Choose always-on or open-by-hand.' ;; esac
   owner=$(id -un)
   sudo -v
   sudo tailscale set "--hostname=$host_name" "--operator=$owner"
   _enroll_keys
   _enroll_ssh
   _enroll_tmux
-  sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+  _enroll_power
   _enroll_t3
   _enroll_moshi
+  _enroll_doors
   jq -n --arg name "$host_name" --arg mode "$reachability" '{name:$name,mode:$mode}' |
     _write_user_file "$state_file" 600
   printf 'Enrolled %s (%s).\n' "$host_name" "$reachability"
@@ -224,5 +440,8 @@ _enroll() {
 
 case "${1:-}" in
   enroll) _enroll ;;
-  *) _fail 'Usage: personal-host.sh enroll' ;;
+  open) _open ;;
+  close) _close ;;
+  status) _status ;;
+  *) _fail 'Usage: personal-host.sh enroll | open | close | status' ;;
 esac

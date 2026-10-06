@@ -69,3 +69,21 @@ _mux_transport() {
     *)    printf ssh ;;
   esac
 }
+
+# Judge a Tailscale /acl/validate response. The endpoint answers 200 for passing AND failing
+# policies: only an empty object passes; otherwise it carries a message and per-test errors.
+# Any other status is an API failure (bad token, wrong tailnet). Prints the verdict; returns 0
+# only when the policy and all its tests pass.
+_acl_validate_verdict() {
+  local code="$1" body="$2"
+  if [ "$code" != 200 ]; then
+    printf 'policy validation request failed (HTTP %s): %s\n' "$code" "$body" >&2; return 1
+  fi
+  if jq -e 'type == "object" and length == 0' <<<"$body" >/dev/null 2>&1; then
+    echo "policy tests: passed (validated by Tailscale; nothing saved)"; return 0
+  fi
+  echo "policy tests: FAILED -- refusing to continue" >&2
+  jq -r '.message // "unrecognised response", (.data[]? | "  \(.user): \(.errors[]?)")' \
+    <<<"$body" >&2 2>/dev/null || printf '%s\n' "$body" >&2
+  return 1
+}

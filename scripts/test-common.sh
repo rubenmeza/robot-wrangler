@@ -50,5 +50,31 @@ else
   ok "fails (rc=1) and prints no ip when off the tailnet"
 fi
 
+echo "==> _acl_validate_verdict"
+
+# The validate endpoint answers 200 for failing policies too; only an empty object passes.
+if _acl_validate_verdict 200 '{}' >/dev/null 2>&1; then
+  ok "passes on 200 with an empty object"
+else bad "should pass on 200 {}"; fi
+
+failed='{"message":"test(s) failed","data":[{"user":"tag:server","errors":["[acl test error]: address \"you@example.com:22\" (protocol \"tcp\"): want: Drop, got: Accept"]}]}'
+if err="$(_acl_validate_verdict 200 "$failed" 2>&1 >/dev/null)"; then
+  bad "should fail on 200 with failing tests"
+elif [[ "$err" == *"tag:server"*"want: Drop, got: Accept"* ]]; then
+  ok "fails on 200 with failing tests and names them"
+else bad "should report the failing tests (got '$err')"; fi
+
+if _acl_validate_verdict 200 '{"message":"json: cannot unmarshal string"}' >/dev/null 2>&1; then
+  bad "should fail on a malformed-policy message"
+else ok "fails on a malformed-policy message"; fi
+
+if _acl_validate_verdict 401 '{"message":"API token invalid"}' >/dev/null 2>&1; then
+  bad "should fail on an API error"
+else ok "fails on a non-200 API error"; fi
+
+if _acl_validate_verdict 200 '' >/dev/null 2>&1; then
+  bad "should fail on an empty body"
+else ok "fails on an empty body"; fi
+
 echo
 if [ "$fail" -eq 0 ]; then echo "common tests OK"; else echo "common tests FAILED"; exit 1; fi

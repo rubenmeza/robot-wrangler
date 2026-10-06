@@ -45,21 +45,11 @@ robot-status: ## show droplet + tailnet status
 	@echo
 	@tailscale status 2>/dev/null | grep -E 'robot' || echo "robot not visible on the tailnet"
 
-tailnet-plan: ## validate policy tests and preview the whole Tailnet policy change
-	@set -eu; set -a; . ./.env; set +a; \
-		: "$${TAILSCALE_API_KEY:?set TAILSCALE_API_KEY in .env}"; \
-		: "$${TAILSCALE_TAILNET:?set TAILSCALE_TAILNET in .env}"; \
-		: "$${TF_VAR_tailnet_owner:?set TF_VAR_tailnet_owner in .env}"; \
-		tofu -chdir=tailnet init -input=false; \
-		tofu -chdir=tailnet plan -input=false
+tailnet-plan: ## preview the whole Tailnet policy change and run its tests via Tailscale
+	@./scripts/tailnet-policy.sh plan
 
-tailnet-apply: ## apply the whole Tailnet policy (separate state from the Robot server)
-	@set -eu; set -a; . ./.env; set +a; \
-		: "$${TAILSCALE_API_KEY:?set TAILSCALE_API_KEY in .env}"; \
-		: "$${TAILSCALE_TAILNET:?set TAILSCALE_TAILNET in .env}"; \
-		: "$${TF_VAR_tailnet_owner:?set TF_VAR_tailnet_owner in .env}"; \
-		tofu -chdir=tailnet init -input=false; \
-		tofu -chdir=tailnet apply
+tailnet-apply: ## run the policy tests, then apply the whole Tailnet policy (separate state from the Robot server)
+	@./scripts/tailnet-policy.sh apply
 
 enroll: ## enroll this Arch/Omarchy machine as a Personal host
 	@./scripts/personal-host.sh enroll

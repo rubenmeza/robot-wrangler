@@ -1,8 +1,8 @@
 # Setup guide — robot-wrangler
 
 Stand up the private agent box from zero. ~30 min, most of it clicking tokens in web consoles.
-**Do the steps in order** — two are order-sensitive (ACL tag *before* auth key; device key *before*
-first apply).
+**Do the steps in order** — two are order-sensitive (Tailnet policy *before* auth key/enrollment; device key *before*
+first Robot server apply).
 
 Working dir: `/home/pollo/Dev/robot-wrangler`.
 
@@ -25,15 +25,54 @@ sudo tailscale up
 Install the Tailscale app on the **Pixel** and **iPad** too, same account. (The **Moshi** app is
 their SSH/mosh client — install it and add device keys later; see `devices/README.md` and ADR 0004.)
 
-## 3. Tailscale ACL — define `tag:server`  ⚠️ order matters
-Admin console → **Access Controls**. Ensure the policy contains:
-```json
-"tagOwners": {
-  "tag:server": ["autogroup:admin"]
-}
+## 3. Apply the Tailnet policy  ⚠️ order matters
+The `tailnet/` OpenTofu root owns the **whole** policy, including `tag:server`, from its own local
+state (`tailnet/terraform.tfstate`). Robot server provisioning and teardown never touch this state
+(ADR 0012). Apply it **before creating the robot auth key or enrolling any Personal host**.
+
+In the admin console's **DNS** page, enable **MagicDNS** and **HTTPS Certificates**. These are
+Tailnet prerequisites for T3 Code's Tailscale Serve HTTPS endpoint. Serve issues certificates
+itself; you do not need to run `tailscale cert` manually. HTTPS certificate names appear in public
+certificate transparency logs; network access remains private. See [Tailscale's HTTPS setup](https://tailscale.com/docs/how-to/set-up-https-certificates).
+
+Create `.env` now if it does not exist; keep it for the rest of the setup:
+```bash
+cd /home/pollo/Dev/robot-wrangler
+test -f .env || cp .env.example .env
+$EDITOR .env
 ```
-Save. Without this, the box's `tailscale up --advertise-tags=tag:server` **fails**, the box never
-joins the tailnet, and you get an invisible, unreachable box.
+Fill only the policy settings for this step:
+
+- `TAILSCALE_API_KEY`: admin **Settings → Keys → API access tokens → Generate access token**.
+  This is an API access token, separate from the single-use node auth key in step 4. It stays on
+  your machine and expires after the chosen 1–90 days; rotate it here when needed.
+- `TAILSCALE_TAILNET`: the Tailnet ID from the admin console (legacy Tailnet names also work).
+- `TF_VAR_tailnet_owner`: your **exact** login identity from **Users** (`you@example.com`,
+  `username@github`, or `username@passkey`). Keep Personal hosts and control-surface clients
+  untagged and signed in as this user. A device tag replaces the user's identity.
+
+Back up the existing policy from **Access Controls** before the first apply. Review the replacement:
+```bash
+make tailnet-plan
+make tailnet-apply          # prompts before replacing the entire live policy
+```
+The provider checks Tailscale's built-in policy tests during planning and on apply. The grant admits
+only the owner's user-owned devices to other owner devices and `tag:server` on SSH TCP 22, mosh UDP
+60000–61000, and HTTPS TCP 443. The tagged robot cannot initiate access to any Personal host; all
+other traffic is denied by default. This uses ordinary OpenSSH, not Tailscale SSH.
+
+The module replaces existing policy contents, so carry any unrelated rules you need into
+`tailnet/main.tf` **before** applying. Back up its state with your other local state files. Never
+run policy destroy: `prevent_destroy` blocks it, and `reset_acl_on_destroy = false` prevents the
+provider from restoring Tailscale's default allow-all policy if that safeguard is deliberately
+removed. `make robot-destroy` remains safe because it only uses the Robot server's root and state.
+
+For the first real rollout, confirm a good apply succeeds, then verify test rejection without
+changing the live policy: temporarily add `"tag:server"` to the grant's `src`, run
+`make tailnet-plan`, and expect the `tag:server` → Personal host denial tests to fail. Restore the
+grant and run `make tailnet-plan` again. **Do not apply the deliberately broken edit.**
+`make test` checks the module with `tofu validate` without API credentials; only a real plan/apply
+can evaluate Tailscale's policy tests. See the [provider's policy resource](https://registry.terraform.io/providers/tailscale/tailscale/latest/docs/resources/acl).
 
 ## 4. Create the Tailscale auth key
 Admin → **Settings → Keys → Generate auth key**:
@@ -66,8 +105,7 @@ Pixel/iPad keys are optional now — add their `*.pub` later (means a rebuild). 
 ## 8. Fill `.env`
 ```bash
 cd /home/pollo/Dev/robot-wrangler
-cp .env.example .env
-$EDITOR .env   # DIGITALOCEAN_TOKEN, TF_VAR_tailscale_authkey, CLAUDE_CODE_OAUTH_TOKEN
+$EDITOR .env   # keep step 3 settings; add DIGITALOCEAN_TOKEN, TF_VAR_tailscale_authkey, CLAUDE_CODE_OAUTH_TOKEN, GH_TOKEN
 ```
 `.env` is gitignored — never commit it. Optional: set `TF_VAR_robot_multiplexer` to `herdr`
 (default) or `tmux` to pick the on-box multiplexer profile — herdr attaches over SSH, tmux over
@@ -105,10 +143,10 @@ From any device on the tailnet: `make robot-attach` → `claude`. That is the wh
 ```bash
 make robot-destroy
 ```
-Removes droplet + firewall. The tailnet node is tagged — delete it in the admin console if it lingers.
+Removes droplet + firewall; the separate Tailnet policy and its state remain intact. The tailnet node is tagged — delete it in the admin console if it lingers.
 
 ## Troubleshooting
-- **Box never appears on the tailnet / `wait-ready` times out:** almost always the ACL tag (step 3)
+- **Box never appears on the tailnet / `wait-ready` times out:** almost always the Tailnet policy/tag (step 3)
   or an auth key that isn't pre-approved/tagged (step 4). There is no public SSH to debug (by design)
   → `make robot-destroy`, fix, retry. To inspect: DO console → **Recovery Console**, then
   `cloud-init status --long` and `journalctl -u tailscaled`.

@@ -45,7 +45,7 @@ Robot server with `make robot-destroy` followed by `make robot-wrangler`. Removi
 Tailnet node blocks its network access immediately; this propagation also removes its SSH
 credential from hosts. Repeat enrollment after restoring any previously offline host.
 
-For a manual acceptance check, enroll and pair a throwaway device with matching labels on
+The live acceptance check is **UNVERIFIED**. To perform it, enroll and pair a throwaway device with matching labels on
 every Agent host. Revoke it from a different Personal host, propagate the key removal as
 above, then verify that both new SSH connections and its established T3 sessions are denied
 on each host. Do not record pairing codes or tokens in terminal logs or screenshots.

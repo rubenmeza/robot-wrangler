@@ -25,7 +25,7 @@ robot-destroy: ## tear the box down (tofu destroy)
 robot-ssh: ## ssh into the box over the tailnet
 	@./scripts/robot-ssh.sh
 
-robot-attach: ## mosh in and attach the 'robot' tmux session
+robot-attach: ## attach the shared robot session (Herdr/SSH or tmux/mosh)
 	@./scripts/robot-attach.sh
 
 robot-auth: ## (re)push the Claude Code subscription token over SSH

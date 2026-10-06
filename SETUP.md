@@ -64,7 +64,7 @@ Back up the existing **Access Controls** policy before the first apply. Review t
 
 ```bash
 make tailnet-plan           # shows the plan, then runs the policy tests; saves nothing
-make tailnet-apply          # runs the policy tests, then prompts before replacing the entire live policy
+make tailnet-apply          # runs the policy tests, then prompts before replacing the live policy
 ```
 
 The provider does not run Tailscale's policy tests during `tofu plan`; a plan that breaks a deny
@@ -199,9 +199,9 @@ t3 pair --tailscale --label pixel
 Scan its one-time code from the Pixel's T3 app (**Settings → Environments**, add an environment),
 not with the phone camera: the camera opens a browser session instead. Repeat for `ipad`, and
 for the other Personal host's exact device name. Use the same exact name as the Tailnet node and
-`devices/<name>.pub`, without `.pub`, as the label. Do not use a model name or a guessed prefix. Pairings are per
-(device, host); they do not propagate through git. Codes and pairing URLs are **passwords**:
-never log, commit or screenshot them. Close the laptop when finished.
+`devices/<name>.pub`, without `.pub`, as the label. Do not use a model name or a guessed
+prefix. Pairings are per (device, host); they do not propagate through git. Codes and pairing
+URLs are **passwords**: never log, commit or screenshot them. Close the laptop when finished.
 
 For Moshi terminal access, add each Personal host's Tailnet name and **its Unix user**, selecting
 that mobile device's SSH key. An interactive login lands in the most recent tmux session. From

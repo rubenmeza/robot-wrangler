@@ -353,6 +353,11 @@ enrollment, pairing, reboot, rebuild or revoke is implied by automated tests.
   server 0.0.45 this warning appears before the code is redeemed. Tap **Add** anyway. To confirm,
   `t3 auth session list` on the host should show a new `bearer-access-token` session with the
   device's label. If none appears, mint a fresh code (`--ttl 15m`) and retry.
+- **New skills don't appear in T3 clients:** a running T3 server keeps serving the skill list it
+  loaded at startup, even after its provider caches in `~/.t3/caches` pick up skills installed
+  or removed in `~/.agents/skills` or `~/.claude/skills`. Once no turn is running, restart it
+  on that host with `systemctl --user restart t3code.service`, then reopen the client and start
+  a new thread on that host's environment. Restarting or rebooting only the client does not help.
 - **Robot never joins / `wait-ready` times out:** check the applied policy and fresh, pre-approved
   `tag:server` auth key, and remove a stale robot node. There is no public SSH. Use DigitalOcean's
   out-of-band Recovery Console and the console credentials from ADR 0005 to inspect
